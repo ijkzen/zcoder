@@ -49,15 +49,19 @@ void main() {
       WidgetTester tester, {
       required int taskCount,
       required int visibleCount,
+      int runningCount = 0,
     }) =>
         tester.pumpWidget(MaterialApp(
           home: Scaffold(
             body: Builder(
               builder: (context) => ElevatedButton(
-                onPressed: () =>
-                    confirmDeleteProject(context,
-                        label: 'demo', taskCount: taskCount,
-                        visibleCount: visibleCount),
+                onPressed: () => confirmDeleteProject(
+                  context,
+                  label: 'demo',
+                  taskCount: taskCount,
+                  visibleCount: visibleCount,
+                  runningCount: runningCount,
+                ),
                 child: const Text('open'),
               ),
             ),
@@ -85,6 +89,23 @@ void main() {
 
       expect(find.textContaining('2 个会话'), findsOneWidget);
       expect(find.textContaining('含已归档'), findsNothing);
+    });
+
+    testWidgets('warns about running sessions only when present',
+        (tester) async {
+      await pumpDialog(tester, taskCount: 3, visibleCount: 3, runningCount: 2);
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('其中 2 个会话正在运行'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      await pumpDialog(tester, taskCount: 1, visibleCount: 1);
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('正在运行'), findsNothing);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
     });
 
     testWidgets('confirm uses the destructive (error) style', (tester) async {

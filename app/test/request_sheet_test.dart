@@ -202,12 +202,13 @@ void main() {
       expect(content['answer'], 'Red');
     });
 
-    testWidgets('cancel on a question sends action cancel', (tester) async {
+    testWidgets('cancel on a question sends action decline (desktop parity)',
+        (tester) async {
       final answers = await pumpSheet(tester, [question()]);
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(answers, [
-        {'action': 'cancel'},
+        {'action': 'decline'},
       ]);
     });
 
@@ -225,13 +226,118 @@ void main() {
       ]);
     });
 
-    testWidgets('freeText cancel sends action cancel', (tester) async {
-      final answers = await pumpSheet(tester, [freeText()]);
-      await tester.tap(find.text('取消'));
+    testWidgets('freeText page has no cancel button (desktop parity)',
+        (tester) async {
+      await pumpSheet(tester, [freeText()]);
+      expect(find.text('取消'), findsNothing);
+      expect(find.text('提交'), findsOneWidget);
+    });
+
+    testWidgets('submit with unanswered pages jumps to the first gap',
+        (tester) async {
+      final answers = <Map<String, Object?>>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: RequestSheet(
+            requests: [
+              question(requestId: 'perm_q1'),
+              question(
+                requestId: 'perm_q2',
+                questions: [
+                  {
+                    'question': '选一个框架',
+                    'options': [
+                      {'value': 'F1', 'label': '框架一'},
+                    ],
+                    'multiSelect': false,
+                  },
+                ],
+              ),
+            ],
+            onResolve: (request, answer) async => answers.add(answer),
+          ),
+        ),
+      ));
       await tester.pumpAndSettle();
-      expect(answers, [
-        {'action': 'cancel'},
+
+      // Answer only the first question, then go to the last page and submit.
+      await tester.tap(find.text('红色'));
+      await tester.pumpAndSettle();
+      // Now on page 2 (unanswered). 提交 must not resolve anything and must
+      // bounce back to the unanswered page — which is the current one, so the
+      // answer set stays empty.
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+      expect(answers, isEmpty);
+      expect(find.text('选一个框架'), findsOneWidget);
+    });
+
+    testWidgets('failed submit keeps the sheet and the answers',
+        (tester) async {
+      var attempts = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: RequestSheet(
+            requests: [permission()],
+            onResolve: (request, answer) async {
+              attempts++;
+              if (attempts == 1) throw StateError('network down');
+            },
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('允许一次'));
+      await tester.pump();
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      // Sheet still open, error shown inline, selection preserved.
+      expect(find.textContaining('提交失败'), findsOneWidget);
+      expect(find.text('取消'), findsOneWidget);
+
+      // Retry succeeds and closes the loop.
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+      expect(attempts, 2);
+      expect(find.textContaining('提交失败'), findsNothing);
+    });
+
+    testWidgets('live listenable: resolved pages vanish, empty auto-closes',
+        (tester) async {
+      final notifier = ValueNotifier<List<PendingRequest>>([
+        permission(requestId: 'perm_a'),
+        permission(requestId: 'perm_b', toolName: 'Read', reason: '读取文件？'),
       ]);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: RequestSheet(
+            requests: notifier.value,
+            requestsListenable: notifier,
+            onResolve: (request, answer) async {},
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('允许执行 bash 命令？'), findsOneWidget);
+
+      // The first request gets resolved elsewhere → its page disappears.
+      notifier.value = [
+        permission(requestId: 'perm_b', toolName: 'Read', reason: '读取文件？'),
+      ];
+      await tester.pumpAndSettle();
+      expect(find.text('允许执行 bash 命令？'), findsNothing);
+      expect(find.text('读取文件？'), findsOneWidget);
+
+      // A new request arriving appends a page.
+      notifier.value = [
+        permission(requestId: 'perm_b', toolName: 'Read', reason: '读取文件？'),
+        permission(requestId: 'perm_c', toolName: 'Edit', reason: '写入文件？'),
+      ];
+      await tester.pumpAndSettle();
+      expect(find.text('读取文件？'), findsOneWidget);
+      // (perm_c's page exists in the PageView even if not currently visible.)
     });
 
     testWidgets('mixed permission + question list pages and resolves each',
