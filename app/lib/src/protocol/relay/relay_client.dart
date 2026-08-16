@@ -20,7 +20,54 @@ const int heartbeatTimeoutMs = 30000;
 
 enum RelayState { connecting, authenticating, paired, reconnecting, closed }
 
-enum RelayFailureReason { relayUnavailable, authFailed, sessionExpired, sessionConflict, desktopOffline, other }
+enum RelayFailureReason {
+  relayUnavailable,
+  authFailed,
+  sessionExpired,
+  sessionConflict,
+  desktopOffline,
+  kicked,
+  other,
+}
+
+/// Maps a relay `error.code` to a failure reason.
+RelayFailureReason mapRelayErrorCode(String code) {
+  switch (code) {
+    case RelayErrorCode.authFailed:
+      return RelayFailureReason.authFailed;
+    case RelayErrorCode.deviceOffline:
+      return RelayFailureReason.desktopOffline;
+    case RelayErrorCode.wrongParam:
+      return RelayFailureReason.sessionExpired;
+    case RelayErrorCode.kicked:
+      return RelayFailureReason.kicked;
+    default:
+      return RelayFailureReason.other;
+  }
+}
+
+/// Bounded FIFO for outbound app payloads while the relay is not `matched`.
+/// New payloads are dropped once full (the oldest keep their turn).
+class OutboundQueue {
+  OutboundQueue(this.maxSize);
+  final int maxSize;
+  final List<Map<String, Object?>> _items = [];
+
+  bool get isEmpty => _items.isEmpty;
+  int get length => _items.length;
+
+  void add(Map<String, Object?> payload) {
+    if (_items.length < maxSize) _items.add(payload);
+  }
+
+  /// Removes and returns everything queued, in order.
+  List<Map<String, Object?>> takeAll() {
+    if (_items.isEmpty) return const [];
+    final items = List<Map<String, Object?>>.from(_items);
+    _items.clear();
+    return items;
+  }
+}
 
 class RelayFailure {
   final RelayFailureReason reason;
@@ -52,7 +99,10 @@ class RelayClient {
     this.clientName = 'zcode-remote-flutter',
   });
 
-  final _stateController = StreamController<RelayState>.broadcast();
+  // sync: true — consumers (BridgeManager._onRelayState, _waitForRelayReady)
+  // must see state transitions in the same microtask; an async broadcast
+  // would let a late subscriber miss the `matched` event entirely.
+  final _stateController = StreamController<RelayState>.broadcast(sync: true);
   final _payloadController = StreamController<Map<String, Object?>>.broadcast();
   final _failureController = StreamController<RelayFailure>.broadcast();
   final _closedController = StreamController<void>.broadcast();
@@ -132,6 +182,7 @@ class RelayClient {
           _cancelWaitingTimeout();
           _setState(RelayState.paired);
           _startHeartbeat();
+          _flushOutboundQueue();
         } else {
           // Desktop offline: hold the connection and let the relay match us
           // with a pair_status_ack once the desktop comes back. Re-sending
@@ -144,14 +195,16 @@ class RelayClient {
           _cancelWaitingTimeout();
           _setState(RelayState.paired);
           _startHeartbeat();
+          _flushOutboundQueue();
         }
         _resetHeartbeatTimeout();
       case DataMessage(:final payload):
         if (!_disposed) _payloadController.add(payload);
       case RelayError(:final code, :final message):
         zlog('[zremote] relay error: code=$code message=$message');
-        _emitFailure(RelayFailure(_mapErrorCode(code), message));
-        if (code == RelayErrorCode.authFailed) {
+        _emitFailure(RelayFailure(mapRelayErrorCode(code), message));
+        if (code == RelayErrorCode.authFailed || code == RelayErrorCode.kicked) {
+          // Fatal: wrong credentials or kicked off — do not auto-reconnect.
           _userClosed = true;
           _setState(RelayState.closed);
           _socket?.close();
@@ -178,19 +231,6 @@ class RelayClient {
   void _cancelWaitingTimeout() {
     _waitingTimer?.cancel();
     _waitingTimer = null;
-  }
-
-  RelayFailureReason _mapErrorCode(String code) {
-    switch (code) {
-      case RelayErrorCode.authFailed:
-        return RelayFailureReason.authFailed;
-      case RelayErrorCode.deviceOffline:
-        return RelayFailureReason.desktopOffline;
-      case RelayErrorCode.wrongParam:
-        return RelayFailureReason.sessionExpired;
-      default:
-        return RelayFailureReason.other;
-    }
   }
 
   void _emitFailure(RelayFailure failure) {
@@ -280,9 +320,30 @@ class RelayClient {
     _heartbeatTimeoutTimer = null;
   }
 
+  /// Outbound data payloads are queued while unpaired (connecting / waiting /
+  /// reconnecting) and flushed once the relay reports `matched` — otherwise
+  /// requests sent during a reconnect window vanish into a dead socket and
+  /// the caller hangs until timeout.
+  static const int maxOutboundQueue = 100;
+  final OutboundQueue _outboundQueue = OutboundQueue(maxOutboundQueue);
+
   /// Sends an application payload as a relay `data` frame (layer 2+).
   void sendPayload(Map<String, Object?> payload) {
+    if (_state != RelayState.paired || _socket == null) {
+      zlog('[zremote] queued payload (state=$_state): ${payload['zcode_type']}');
+      _outboundQueue.add(payload);
+      return;
+    }
     _send(DataMessage(payload: payload, clientTs: DateTime.now().millisecondsSinceEpoch));
+  }
+
+  void _flushOutboundQueue() {
+    final queued = _outboundQueue.takeAll();
+    if (queued.isEmpty) return;
+    zlog('[zremote] flushing ${queued.length} queued payload(s)');
+    for (final payload in queued) {
+      _send(DataMessage(payload: payload, clientTs: DateTime.now().millisecondsSinceEpoch));
+    }
   }
 
   void _send(RelayMessage message) {

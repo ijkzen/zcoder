@@ -67,6 +67,12 @@ class Workspace {
   /// (the desktop's web client filters on this same flag).
   final bool archived;
 
+  /// Pinned tasks sort to the top of the task list (wire `pinned`).
+  final bool pinned;
+
+  /// Non-null when the task has unread activity (`unreadAt` millis).
+  final int? unreadAt;
+
   const Workspace({
     required this.workspaceKey,
     required this.workspacePath,
@@ -81,6 +87,8 @@ class Workspace {
     this.createdAt,
     this.updatedAt,
     this.archived = false,
+    this.pinned = false,
+    this.unreadAt,
   });
 
   factory Workspace.fromJson(Map<String, Object?> json) {
@@ -104,6 +112,8 @@ class Workspace {
       createdAt: json['createdAt'] as int?,
       updatedAt: json['updatedAt'] as int?,
       archived: json['archived'] as bool? ?? false,
+      pinned: json['pinned'] as bool? ?? false,
+      unreadAt: json['unreadAt'] as int?,
     );
   }
 
@@ -257,10 +267,39 @@ class TurnHeaderRow extends ConversationRow {
       );
 }
 
+/// One attachment carried by a user-input row (`attachments[]` in the row
+/// schema: ref/fileName/mime/bytes/previewRef).
+class RowAttachment {
+  final String ref;
+  final String fileName;
+  final String mime;
+  final int bytes;
+  final String? previewRef;
+
+  const RowAttachment({
+    required this.ref,
+    required this.fileName,
+    required this.mime,
+    required this.bytes,
+    this.previewRef,
+  });
+
+  factory RowAttachment.fromJson(Map<String, Object?> json) => RowAttachment(
+        ref: json['ref']?.toString() ?? '',
+        fileName: json['fileName']?.toString() ?? '',
+        mime: json['mime']?.toString() ?? '',
+        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+        previewRef: json['previewRef']?.toString(),
+      );
+
+  bool get isImage => mime.startsWith('image/');
+}
+
 class UserInputRow extends ConversationRow {
   final String text;
+  final List<RowAttachment> attachments;
   final Map<String, Object?> raw;
-  const UserInputRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.text, required this.raw});
+  const UserInputRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.text, this.attachments = const [], required this.raw});
   factory UserInputRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
       UserInputRow(
         rowId: rowId,
@@ -268,13 +307,17 @@ class UserInputRow extends ConversationRow {
         entityId: entityId,
         createdAt: createdAt,
         text: json['inputText']?.toString() ?? json['text']?.toString() ?? '',
+        attachments: [
+          for (final a in (json['attachments'] as List? ?? const []))
+            if (a is Map) RowAttachment.fromJson(a.cast<String, Object?>()),
+        ],
         raw: json,
       );
 
   @override
   ConversationRow withDelta(List<String> path, String append) {
     if (path.length == 1 && path[0] == 'inputText') {
-      return UserInputRow(rowId: rowId, turnId: turnId, entityId: entityId, createdAt: createdAt, text: text + append, raw: raw);
+      return UserInputRow(rowId: rowId, turnId: turnId, entityId: entityId, createdAt: createdAt, text: text + append, attachments: attachments, raw: raw);
     }
     return this;
   }
@@ -969,6 +1012,9 @@ class SessionModelConfig {
   final String? provider;
   final String? model;
   final String? thoughtLevel;
+
+  /// Collaboration mode (build/edit/plan/yolo) from `settings.mode.current`.
+  final String? mode;
   final List<ModelOption> availableModels;
   final List<ThoughtLevelOption> availableThoughtLevels;
 
@@ -976,6 +1022,7 @@ class SessionModelConfig {
     this.provider,
     this.model,
     this.thoughtLevel,
+    this.mode,
     this.availableModels = const [],
     this.availableThoughtLevels = const [],
   });
@@ -984,6 +1031,7 @@ class SessionModelConfig {
     if (settings == null) return const SessionModelConfig();
     final model = settings['model'];
     final thought = settings['thoughtLevel'];
+    final mode = settings['mode'];
     return SessionModelConfig(
       provider: model is Map<String, Object?>
           ? (model['current'] is Map<String, Object?>
@@ -997,6 +1045,9 @@ class SessionModelConfig {
           : null,
       thoughtLevel: thought is Map<String, Object?>
           ? thought['current']?.toString()
+          : null,
+      mode: mode is Map<String, Object?>
+          ? mode['current']?.toString()
           : null,
       availableModels: model is Map<String, Object?> &&
               model['available'] is List

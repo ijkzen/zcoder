@@ -184,6 +184,8 @@ class ConversationController {
   int _topicSeq = 0;
   bool _hasBase = false;
   StreamSubscription<TopicFrame>? _frameSub;
+  StreamSubscription<int>? _recoveredSub;
+  Timer? _resubscribeTimer;
   bool _disposed = false;
 
   Future<void> start() async {
@@ -191,6 +193,12 @@ class ConversationController {
     if (channel == null) throw StateError('no session channel');
 
     _frameSub = channel.conversationFrames.listen(_onFrame);
+    // A bridge recovery (transport fault / relay drop) kills the server-side
+    // subscription — resubscribe from a clean base when the bridge reports
+    // healthy again.
+    _recoveredSub = bridge.recoveredStream.listen((_) {
+      unawaited(_onBridgeRecovered());
+    });
 
     final ack = await channel.subscribe(sessionId);
     _subscriptionId = ack.subscriptionId;
@@ -211,6 +219,40 @@ class ConversationController {
     _tokenTimer = Timer.periodic(const Duration(seconds: 6), (_) {
       pollTokenUsage();
     });
+  }
+
+  /// The bridge was recovered (reconnect or reopen): rebind the frame stream
+  /// to the new topic session and resubscribe from a clean base. Retries
+  /// every 3 s until the subscription lands.
+  Future<void> _onBridgeRecovered() async {
+    if (_disposed) return;
+    final channel = bridge.topicSession;
+    if (channel == null) return;
+    _resubscribeTimer?.cancel();
+    await _frameSub?.cancel();
+    _frameSub = channel.conversationFrames.listen(_onFrame);
+    final oldSub = _subscriptionId;
+    _subscriptionId = null;
+    _hasBase = false;
+    _topicSeq = 0;
+    _topicSeqEpoch = null;
+    if (oldSub != null) {
+      try {
+        await channel.unsubscribeConversation(sessionId, oldSub);
+      } catch (_) {}
+    }
+    try {
+      final ack = await channel.subscribe(sessionId);
+      _subscriptionId = ack.subscriptionId;
+      if (!_disposed) _connectedController.add(true);
+      await _resync();
+      zlog('[zremote] conversation resubscribed after bridge recovery');
+    } catch (e) {
+      zlog('[zremote] conversation resubscribe failed: $e');
+      _resubscribeTimer = Timer(const Duration(seconds: 3), () {
+        unawaited(_onBridgeRecovered());
+      });
+    }
   }
 
   Timer? _pollTimer;
@@ -432,6 +474,8 @@ class ConversationController {
     _disposed = true;
     _pollTimer?.cancel();
     _tokenTimer?.cancel();
+    _resubscribeTimer?.cancel();
+    await _recoveredSub?.cancel();
     await _frameSub?.cancel();
     final channel = bridge.topicSession;
     final subscriptionId = _subscriptionId;

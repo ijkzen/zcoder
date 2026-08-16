@@ -117,13 +117,13 @@ class RpcFrameTransport {
     }
     final messageSeq = ++_messageSeq;
     final fragmentCount =
-        (message.length + ProtocolLimits.maxPhysicalFrameBytes - 1) ~/
-            ProtocolLimits.maxPhysicalFrameBytes;
+        (message.length + ProtocolLimits.fragmentPayloadBytes - 1) ~/
+            ProtocolLimits.fragmentPayloadBytes;
     final checksum = crc32Hex(message);
     final frames = <Map<String, Object?>>[];
     for (var i = 0; i < fragmentCount; i++) {
-      final start = i * ProtocolLimits.maxPhysicalFrameBytes;
-      final end = (start + ProtocolLimits.maxPhysicalFrameBytes)
+      final start = i * ProtocolLimits.fragmentPayloadBytes;
+      final end = (start + ProtocolLimits.fragmentPayloadBytes)
           .clamp(0, message.length);
       final chunk = Uint8List.sublistView(message, start, end);
       frames.add({

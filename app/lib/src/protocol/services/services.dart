@@ -40,6 +40,12 @@ class ZcodeTaskService extends WorkspaceService {
   ZcodeTaskService(RpcChannel channel, WorkspaceTarget target)
       : super(channel, target);
 
+  /// `prepareWorkspace` — the workspace's config options (provider/model/
+  /// thought/collaboration/followup selects) and slash commands (builtin +
+  /// custom skills/MCP).
+  Future<Map<String, Object?>> prepareWorkspace() =>
+      _call('prepareWorkspace', const {});
+
   /// Cumulative token counters for a task.
   Future<Map<String, Object?>> getTaskTokenUsage(String taskId) =>
       _call('getTaskTokenUsage', {'taskId': taskId});
@@ -118,4 +124,179 @@ class ZcodeSessionService extends WorkspaceService {
 
   /// The workspace's model registry and default thought level.
   Future<Map<String, Object?>> readWorkspaceState() => _call('readWorkspaceState', const {});
+}
+
+/// `model-provider` channel — provider CRUD on the desktop's model registry.
+class ModelProviderService {
+  final RpcChannel _channel;
+  ModelProviderService(this._channel);
+
+  Future<List<Map<String, Object?>>> getAll() async {
+    final raw = await _channel.call('getAll');
+    if (raw is! List) return const [];
+    return [
+      for (final item in raw.whereType<Map>()) item.cast<String, Object?>(),
+    ];
+  }
+
+  Future<Object?> save(Map<String, Object?> provider) => _channel.call(
+        'save',
+        {
+          ...provider,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        },
+      );
+
+  Future<Object?> delete(String id) => _channel.call('delete', [
+        {'id': id},
+      ]);
+}
+
+/// `skills` channel — enabled skills of the workspace; triggered in the
+/// composer as `$name`.
+class SkillsService {
+  final RpcChannel _channel;
+  final WorkspaceTarget target;
+
+  SkillsService(this._channel, this.target);
+
+  Future<List<SkillEntry>> list({String provider = 'glm'}) async {
+    final raw = await _channel
+        .call('list', {...target.toJson(), 'provider': provider})
+        .timeout(const Duration(seconds: 20));
+    final list = raw is List ? raw : (raw is Map ? raw['skills'] : null);
+    if (list is! List) return const [];
+    return [
+      for (final item in list.whereType<Map>())
+        SkillEntry.fromJson(item.cast<String, dynamic>()),
+    ].where((s) => s.name.isNotEmpty).toList();
+  }
+}
+
+/// One slash command from `prepareWorkspace` (builtin / custom / skill / MCP).
+class SlashCommand {
+  final String name;
+  final String description;
+  final String? inputHint;
+  final String source;
+  const SlashCommand({
+    required this.name,
+    required this.description,
+    this.inputHint,
+    required this.source,
+  });
+
+  factory SlashCommand.fromJson(Map<String, Object?> json) => SlashCommand(
+        name: json['name']?.toString() ?? '',
+        description: json['description']?.toString() ?? '',
+        inputHint: json['inputHint']?.toString(),
+        source: json['source']?.toString() ?? '',
+      );
+}
+
+/// One config option from `prepareWorkspace` (provider/model/thought/
+/// collaborationMode/followupMode selects).
+class ConfigOption {
+  final String id;
+  final String name;
+  final String category;
+  final String type;
+  final Object? currentValue;
+  final List<ConfigOptionValue> options;
+  const ConfigOption({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.type,
+    this.currentValue,
+    required this.options,
+  });
+
+  factory ConfigOption.fromJson(Map<String, Object?> json) => ConfigOption(
+        id: json['id']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+        category: json['category']?.toString() ?? '',
+        type: json['type']?.toString() ?? '',
+        currentValue: json['currentValue'],
+        options: [
+          for (final o in (json['options'] as List? ?? const []))
+            if (o is Map) ConfigOptionValue.fromJson(o.cast<String, dynamic>()),
+        ],
+      );
+}
+
+class ConfigOptionValue {
+  final String value;
+  final String name;
+  final String? description;
+  final String? modelProviderName;
+  const ConfigOptionValue({
+    required this.value,
+    required this.name,
+    this.description,
+    this.modelProviderName,
+  });
+
+  factory ConfigOptionValue.fromJson(Map<String, Object?> json) =>
+      ConfigOptionValue(
+        value: json['value']?.toString() ?? '',
+        name: json['name']?.toString() ?? json['value']?.toString() ?? '',
+        description: json['description']?.toString(),
+        modelProviderName: json['modelProviderName']?.toString(),
+      );
+}
+
+/// `prepareWorkspace` result: config options + slash commands.
+class WorkspacePrep {
+  final List<ConfigOption> configOptions;
+  final List<SlashCommand> slashCommands;
+  const WorkspacePrep({required this.configOptions, required this.slashCommands});
+
+  factory WorkspacePrep.fromJson(Map<String, Object?> json) => WorkspacePrep(
+        configOptions: [
+          for (final o in (json['configOptions'] as List? ?? const []))
+            if (o is Map) ConfigOption.fromJson(o.cast<String, dynamic>()),
+        ],
+        slashCommands: [
+          for (final c in (json['slashCommands'] as List? ?? const []))
+            if (c is Map) SlashCommand.fromJson(c.cast<String, dynamic>()),
+        ],
+      );
+
+  ConfigOption? option(String id) {
+    for (final o in configOptions) {
+      if (o.id == id) return o;
+    }
+    return null;
+  }
+}
+
+/// An enabled skill from `skills.list`.
+class SkillEntry {
+  final String id;
+  final String name;
+  final String path;
+  final String scope;
+  final String? description;
+  final String? argumentHint;
+  final bool enabled;
+  const SkillEntry({
+    required this.id,
+    required this.name,
+    required this.path,
+    required this.scope,
+    this.description,
+    this.argumentHint,
+    required this.enabled,
+  });
+
+  factory SkillEntry.fromJson(Map<String, Object?> json) => SkillEntry(
+        id: json['id']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+        path: json['path']?.toString() ?? '',
+        scope: json['scope']?.toString() ?? 'workspace',
+        description: json['description']?.toString(),
+        argumentHint: json['argumentHint']?.toString(),
+        enabled: json['enabled'] != false,
+      );
 }

@@ -23,3 +23,6 @@ android/app/build/
 screen*.png
 s*.png
 .analysis/
+
+# ZCode local state
+.zcode/

@@ -75,9 +75,11 @@ class WorkspaceListData {
     this.activeTaskId,
   });
 
-  /// Canonical merge of the two lists: task entries first (they carry
-  /// display status), workspace entries fill any gaps, deduplicated by
-  /// workspace key (`workspaceIdentity` when present, else path).
+  /// Canonical merge of the two lists: every task entry is kept (each task is
+  /// one session — several sessions of the same workspace share its path, so
+  /// dedup by key would collapse them); workspace entries only fill keys no
+  /// task covers (tasks carry display status and win over the bare workspace
+  /// entry).
   List<Map<String, Object?>> get mergedEntries {
     String keyOf(Map<String, Object?> e) {
       final id = e['workspaceIdentity'];
@@ -87,15 +89,14 @@ class WorkspaceListData {
     }
 
     final out = <Map<String, Object?>>[];
-    void add(Map<String, Object?> e) {
-      if (out.every((existing) => keyOf(existing) != keyOf(e))) out.add(e);
-    }
-
+    final taskKeys = <String>{};
     for (final t in tasks ?? const <Map<String, Object?>>[]) {
-      add(t);
+      out.add(t);
+      taskKeys.add(keyOf(t));
     }
     for (final w in workspaces) {
-      add(w);
+      if (taskKeys.contains(keyOf(w))) continue;
+      out.add(w);
     }
     return out;
   }

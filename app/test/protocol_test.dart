@@ -11,6 +11,7 @@ import 'package:zcode_remote/src/protocol/relay/relay_frame.dart';
 import 'package:zcode_remote/src/protocol/topics/wire_frame.dart';
 import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 import 'package:zcode_remote/src/protocol/payload/app_payload.dart';
+import 'package:zcode_remote/src/protocol/services/services.dart';
 import 'package:zcode_remote/src/protocol/transport/rpc_frame_transport.dart';
 import 'package:zcode_remote/src/protocol/limits.dart';
 
@@ -111,6 +112,36 @@ void main() {
           '{"type":"data","payload":{"zcode_type":"workspace-list-request","requestId":"r1"},"client_ts":123}');
       expect(data, isA<DataMessage>());
       expect((data as DataMessage).payload['zcode_type'], 'workspace-list-request');
+    });
+
+    test('relay error codes map to failure reasons', () {
+      expect(mapRelayErrorCode(RelayErrorCode.kicked), RelayFailureReason.kicked);
+      expect(mapRelayErrorCode(RelayErrorCode.authFailed), RelayFailureReason.authFailed);
+      expect(mapRelayErrorCode(RelayErrorCode.deviceOffline), RelayFailureReason.desktopOffline);
+      expect(mapRelayErrorCode(RelayErrorCode.wrongParam), RelayFailureReason.sessionExpired);
+      expect(mapRelayErrorCode('UNKNOWN_FUTURE_CODE'), RelayFailureReason.other);
+    });
+  });
+
+  group('outbound queue', () {
+    test('buffers in order and flushes all at once', () {
+      final q = OutboundQueue(100);
+      expect(q.isEmpty, isTrue);
+      q.add({'zcode_type': 'a'});
+      q.add({'zcode_type': 'b'});
+      final all = q.takeAll();
+      expect(all.map((p) => p['zcode_type']), ['a', 'b']);
+      expect(q.isEmpty, isTrue);
+      expect(q.takeAll(), isEmpty);
+    });
+
+    test('drops new payloads once full (oldest keep their turn)', () {
+      final q = OutboundQueue(2);
+      q.add({'zcode_type': 'a'});
+      q.add({'zcode_type': 'b'});
+      q.add({'zcode_type': 'c'});
+      expect(q.length, 2);
+      expect(q.takeAll().map((p) => p['zcode_type']), ['a', 'b']);
     });
   });
 
@@ -442,6 +473,34 @@ void main() {
       expect(degraded, [RpcFrameFault.futureAck]);
       await transport.dispose();
     });
+
+    test('fragments stay under the 1 MiB envelope limit (512 KiB raw)', () async {
+      final sent = <Map<String, Object?>>[];
+      final transport = RpcFrameTransport(
+        sendPayload: sent.add,
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      // 600 KiB message -> 2 fragments (512 KiB + 88 KiB); at the old 1 MiB
+      // raw chunk size this produced a single ~1.37 MiB base64 envelope that
+      // violates the desktop's `dataBase64 <= 1 MiB` schema refine.
+      final message = Uint8List(600 * 1024);
+      transport.sendMessage(message);
+      final frames = sent.where((p) => p['zcode_type'] == 'rpc-frame').toList();
+      expect(frames, hasLength(2));
+      expect(frames[0]['fragmentCount'], 2);
+      expect(frames[0]['messageBytes'], message.length);
+      for (final frame in frames) {
+        expect(
+          frame['dataBase64'] as String,
+          hasLength(lessThanOrEqualTo(ProtocolLimits.maxPhysicalFrameBytes)),
+        );
+        expect(
+          jsonEncode(frame).length,
+          lessThanOrEqualTo(ProtocolLimits.maxPhysicalFrameBytes),
+        );
+      }
+      await transport.dispose();
+    });
   });
 
   group('topic wire frames', () {
@@ -716,6 +775,42 @@ void main() {
       expect(merged.first['taskId'], 't1');
     });
 
+    test('mergedEntries keeps every task of the same workspace', () {
+      // Several sessions of one project share its workspacePath — dedup by
+      // key must NOT collapse them into a single entry.
+      final data = WorkspaceListData.fromResult({
+        'workspaces': [
+          {'workspacePath': '/a', 'label': 'a', 'kind': 'local'},
+        ],
+        'tasks': [
+          {
+            'taskId': 't1',
+            'title': 'One',
+            'workspacePath': '/a',
+            'workspaceLabel': 'a',
+            'workspaceKind': 'local',
+          },
+          {
+            'taskId': 't2',
+            'title': 'Two',
+            'workspacePath': '/a',
+            'workspaceLabel': 'a',
+            'workspaceKind': 'local',
+          },
+          {
+            'taskId': 't3',
+            'title': 'Three',
+            'workspacePath': '/a',
+            'workspaceLabel': 'a',
+            'workspaceKind': 'local',
+          },
+        ],
+      })!;
+      final merged = data.mergedEntries;
+      expect(merged, hasLength(3));
+      expect(merged.map((e) => e['taskId']), ['t1', 't2', 't3']);
+    });
+
     test('mergedEntries keeps remote workspace and task entries apart by key',
         () {
       final data = WorkspaceListData.fromResult({
@@ -741,6 +836,109 @@ void main() {
         ],
       })!;
       expect(data.mergedEntries, hasLength(1));
+    });
+
+    test('task entries parse pinned / unreadAt / archived flags', () {
+      final data = WorkspaceListData.fromResult({
+        'tasks': [
+          {
+            'taskId': 't1',
+            'title': 'Pinned',
+            'workspacePath': '/a',
+            'workspaceLabel': 'a',
+            'workspaceKind': 'local',
+            'pinned': true,
+            'unreadAt': 123456789,
+          },
+          {
+            'taskId': 't2',
+            'title': 'Plain',
+            'workspacePath': '/b',
+            'workspaceLabel': 'b',
+            'workspaceKind': 'local',
+          },
+          {
+            'taskId': 't3',
+            'title': 'Archived',
+            'workspacePath': '/c',
+            'workspaceLabel': 'c',
+            'workspaceKind': 'local',
+            'archived': true,
+          },
+        ],
+      })!;
+      final tasks = [
+        for (final entry in data.mergedEntries)
+          Workspace.fromJson(entry.cast<String, Object?>())
+      ];
+      expect(tasks, hasLength(3));
+      final pinned = tasks.firstWhere((w) => w.taskId == 't1');
+      expect(pinned.pinned, isTrue);
+      expect(pinned.unreadAt, 123456789);
+      expect(pinned.archived, isFalse);
+      final plain = tasks.firstWhere((w) => w.taskId == 't2');
+      expect(plain.pinned, isFalse);
+      expect(plain.unreadAt, isNull);
+      final archived = tasks.firstWhere((w) => w.taskId == 't3');
+      expect(archived.archived, isTrue);
+      expect(archived.pinned, isFalse);
+    });
+  });
+
+  group('workspace prep & skills models', () {
+    test('parseWorkspacePrep config options and slash commands', () {
+      final prep = WorkspacePrep.fromJson({
+        'configOptions': [
+          {
+            'id': 'mode',
+            'name': '协作模式',
+            'category': 'mode',
+            'type': 'select',
+            'currentValue': 'build',
+            'options': [
+              {'value': 'build', 'name': 'Build'},
+              {'value': 'plan', 'name': 'Plan'},
+            ],
+          },
+        ],
+        'slashCommands': [
+          {'name': 'compact', 'description': '压缩上下文', 'source': 'builtin'},
+          {
+            'name': 'review',
+            'description': '代码评审',
+            'inputHint': '提交范围',
+            'source': 'custom',
+          },
+        ],
+      });
+      expect(prep.option('mode'), isNotNull);
+      expect(prep.option('mode')!.options.map((o) => o.value),
+          ['build', 'plan']);
+      expect(prep.option('mode')!.currentValue, 'build');
+      expect(prep.slashCommands, hasLength(2));
+      expect(prep.slashCommands.first.name, 'compact');
+      expect(prep.slashCommands.first.source, 'builtin');
+      expect(prep.slashCommands[1].inputHint, '提交范围');
+    });
+
+    test('skill entries parse with defaults', () {
+      final skills = [
+        for (final raw in [
+          {
+            'id': 's1',
+            'name': 'review',
+            'path': '/skills/review',
+            'scope': 'workspace',
+            'description': 'code review',
+          },
+          {'id': 's2', 'name': 'x', 'path': '/x', 'enabled': false},
+        ])
+          SkillEntry.fromJson(raw.cast<String, Object?>())
+      ];
+      expect(skills[0].name, 'review');
+      expect(skills[0].description, 'code review');
+      expect(skills[0].enabled, isTrue);
+      expect(skills[1].enabled, isFalse);
     });
   });
 }

@@ -146,6 +146,7 @@ class NotificationService {
       'desktopOffline' => '桌面端已离线，正在等待重连',
       'sessionExpired' => '链接已失效，请重新扫码配对',
       'sessionConflict' => '已被其他设备接管',
+      'kicked' => '已被其他设备接管，连接已断开',
       'relayUnavailable' => '无法连接中转服务，正在重试',
       'bridge-degraded' => '连接不稳定，正在重连',
       'desktop-disconnected' => '与桌面端的连接已断开，正在重连',

@@ -8,7 +8,11 @@ library;
 import '../zlog.dart';
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 
 import '../core/random_ids.dart' as ids;
 import '../limits.dart';
@@ -73,7 +77,7 @@ class TopicSession {
 
   /// `helloConversationV4()` then `initializeConversationV4(clientHello)`,
   /// then subscribes to the three frame-push events. Returns the hello map.
-  Future<Map<String, Object?>> initialize({String appVersion = '3.4.0'}) async {
+  Future<Map<String, Object?>> initialize({String appVersion = '3.6.5'}) async {
     final helloRaw = await _channel.call('helloConversationV4');
     zlog('[zremote] hello response: $helloRaw');
     if (helloRaw is Map<String, Object?>) {
@@ -84,9 +88,11 @@ class TopicSession {
       'kind': 'clientHello',
       'protocolVersion': ProtocolLimits.conversationProtocolVersion,
       'clientId': clientId,
-      // clientKind is optional in the clientHello schema; 'mobileRemote'
-      // tells the host this is a phone remote-control client.
-      'clientKind': 'mobileRemote',
+      // 'mobileApp' (with a current desktop appVersion) is what the host's
+      // runtime push path expects from a phone client — the earlier
+      // 'mobileRemote' + 3.4.0 combo never received 204/wire-frame events
+      // (E2E-verified 2026-08-16; re-verified after the change in stage 2).
+      'clientKind': 'mobileApp',
       'appVersion': appVersion,
     });
     _conversationEventSub = _channel
@@ -109,6 +115,9 @@ class TopicSession {
       final frame =
           TopicFrame.fromMap(result.frame, deliveryKind: result.deliveryKind);
       if (frame == null) return;
+      zlog('[zremote] wire frame delivered: topic=${frame.topic} '
+          'kind=${frame.snapshot != null ? 'snapshot' : 'deltas'} '
+          'toSeq=${frame.toSeq}');
       if (!target.isClosed) target.add(frame);
     };
   }
@@ -248,6 +257,133 @@ class TopicSession {
       'envelope': command,
     });
     return raw is Map<String, Object?> ? raw : const {};
+  }
+
+  // ------------------------------------------------------------ attachments
+
+  /// Raw bytes per attachment chunk: keeps the base64 body well under the
+  /// 1 MiB physical frame limit once the rpc-frame transport re-fragments.
+  static const int attachmentChunkBytes = 384 * 1024;
+
+  Map<String, Object?> _attachmentBase(String uploadId, String sessionId) {
+    final connId = _connectionId;
+    if (connId == null) throw StateError('attachment: no connectionId');
+    return {
+      'workspacePath': workspaceKey,
+      'workspace': {'workspacePath': workspaceKey},
+      'connectionId': connId,
+      'uploadId': uploadId,
+      'sessionId': sessionId,
+    };
+  }
+
+  Future<Map<String, Object?>> _attachmentCall(
+    String method,
+    Map<String, Object?> args,
+  ) async {
+    final raw = await _channel.call(method, args);
+    return raw is Map<String, Object?> ? raw : const {};
+  }
+
+  /// Uploads an attachment (begin/chunk/commit, mirrors the web client's
+  /// `rNe()`), resuming from the server's `nextChunkIndex`. Returns the
+  /// attachment descriptor `{ref, fileName, mime, bytes}` to pass to
+  /// sendText / createSession.
+  Future<Map<String, Object?>> attachmentPut({
+    required String sessionId,
+    required String fileName,
+    required String mime,
+    required Uint8List bytes,
+    void Function(double progress)? onProgress,
+  }) async {
+    if (bytes.length > ProtocolLimits.attachmentMaxBytes) {
+      throw StateError('attachment too large (max '
+          '${ProtocolLimits.attachmentMaxBytes ~/ (1024 * 1024)} MiB)');
+    }
+    final uploadId = 'upload-${ids.newCommandId()}';
+    final base = _attachmentBase(uploadId, sessionId);
+    final totalChunks =
+        (bytes.length + attachmentChunkBytes - 1) ~/ attachmentChunkBytes;
+    if (totalChunks > ProtocolLimits.attachmentUploadMaxChunks) {
+      throw StateError('attachment chunk count exceeds '
+          '${ProtocolLimits.attachmentUploadMaxChunks}');
+    }
+    final checksum = 'sha256:${sha256.convert(bytes).toString()}';
+
+    final beginRes = await _attachmentCall('attachmentBeginV4', {
+      ...base,
+      'fileName': fileName,
+      'mime': mime,
+      'totalBytes': bytes.length,
+      'totalChunks': totalChunks,
+      'checksum': checksum,
+    });
+    if (beginRes['state'] == 'committed') {
+      // The server already holds an identical upload.
+      onProgress?.call(1);
+      return {
+        'ref': beginRes['ref'],
+        'fileName': fileName,
+        'mime': mime,
+        'bytes': bytes.length,
+      };
+    }
+    var nextChunk =
+        (beginRes['nextChunkIndex'] as num?)?.toInt() ?? 0;
+    for (var n = nextChunk; n < totalChunks; n++) {
+      final start = n * attachmentChunkBytes;
+      final end = math.min(start + attachmentChunkBytes, bytes.length);
+      final chunkRes = await _attachmentCall('attachmentChunkV4', {
+        ...base,
+        'chunkIndex': n,
+        'dataBase64': base64Encode(Uint8List.sublistView(bytes, start, end)),
+      });
+      final serverNext =
+          (chunkRes['nextChunkIndex'] as num?)?.toInt() ?? n + 1;
+      if (serverNext != n + 1) {
+        throw StateError('fault.attachment.invalidServerProgress');
+      }
+      onProgress?.call((n + 1) / totalChunks);
+    }
+    onProgress?.call(1);
+    final commitRes = await _attachmentCall('attachmentCommitV4', base);
+    return {
+      'ref': commitRes['ref'],
+      'fileName': fileName,
+      'mime': mime,
+      'bytes': bytes.length,
+    };
+  }
+
+  /// Reads an attachment back (e.g. image previews). Returns `{bytes,
+  /// mediaType}`.
+  Future<({Uint8List bytes, String? mediaType})> attachmentRead(
+    String sessionId, {
+    required String ref,
+  }) async {
+    final chunks = <int>[];
+    var offset = 0;
+    String? mediaType;
+    for (var round = 0; round < 1024; round++) {
+      final res = await _attachmentCall('attachmentReadV4', {
+        'workspacePath': workspaceKey,
+        'sessionId': sessionId,
+        'ref': ref,
+        'offset': offset,
+        'limit': attachmentChunkBytes,
+      });
+      mediaType ??= res['mediaType']?.toString();
+      final data = res['dataBase64']?.toString();
+      if (data != null && data.isNotEmpty) {
+        chunks.addAll(base64Decode(data));
+      }
+      final next = (res['nextOffset'] as num?)?.toInt();
+      final total = (res['totalBytes'] as num?)?.toInt();
+      if (next == null || next <= offset) break;
+      offset = next;
+      if (total != null && offset >= total) break;
+    }
+    return (bytes: Uint8List.fromList(chunks), mediaType: mediaType);
   }
 
   /// The raw channel, for service RPCs (zcode-task / zcode-session).
