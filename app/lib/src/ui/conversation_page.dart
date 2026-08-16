@@ -1,11 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app_controller.dart';
 import '../session/conversation_controller.dart';
+import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'request_sheet.dart';
 import 'model_config_sheet.dart';
@@ -33,6 +38,9 @@ class ConversationPage extends StatefulWidget {
 }
 
 class _ConversationPageState extends State<ConversationPage> {
+  /// Bytes cache for in-chat attachment previews (keyed by attachment ref).
+  static final Map<String, Uint8List> attachmentCache = {};
+
   final _scrollController = ScrollController();
   final _inputController = TextEditingController();
   bool _sending = false;
@@ -44,9 +52,19 @@ class _ConversationPageState extends State<ConversationPage> {
 
   ConversationState? _state;
 
+  // Pending attachments: uploaded descriptors `{ref, fileName, mime, bytes}`
+  // shown as chips above the composer and sent along with the next text.
+  final _attachments = <Map<String, Object?>>[];
+  bool _uploading = false;
+  double _uploadProgress = 0;
+  String _uploadingName = '';
+
   @override
   void initState() {
     super.initState();
+    // Keep the screen on while driving the agent — long sessions die on
+    // autolock otherwise (released in dispose).
+    WakelockPlus.enable();
     _scrollController.addListener(_onScroll);
     _open();
   }
@@ -82,6 +100,7 @@ class _ConversationPageState extends State<ConversationPage> {
 
   @override
   void dispose() {
+    WakelockPlus.disable();
     _olderDebounce?.cancel();
     _scrollController.dispose();
     _inputController.dispose();
@@ -91,13 +110,22 @@ class _ConversationPageState extends State<ConversationPage> {
 
   Future<void> _send() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _attachments.isEmpty) return;
     setState(() => _sending = true);
     try {
       // The desktop may be mid-restart (runtime respawns after relay
       // reconnect); a timeout keeps the send button from staying disabled.
-      await widget.app.sendText(text).timeout(const Duration(seconds: 15));
+      await widget.app
+          .sendText(
+            text,
+            attachments: _attachments.isEmpty
+                ? null
+                : List<Map<String, Object?>>.from(_attachments),
+          )
+          .timeout(const Duration(seconds: 15));
       _inputController.clear();
+      _attachments.clear();
+      setState(() {});
       _backToBottom();
     } catch (e) {
       if (mounted) {
@@ -191,10 +219,54 @@ class _ConversationPageState extends State<ConversationPage> {
             onPressed: _showTokenUsageSheet,
             icon: const Icon(Icons.data_usage),
           ),
-          IconButton(
-            tooltip: '模型与思考等级',
-            onPressed: _showModelConfigSheet,
-            icon: const Icon(Icons.tune),
+          PopupMenuButton<String>(
+            tooltip: '会话菜单',
+            onSelected: (value) {
+              switch (value) {
+                case 'compact':
+                  _confirmCompact();
+                case 'model':
+                  _showModelConfigSheet();
+                case 'pauseGoal':
+                  _runGoalCommand(widget.app.pauseGoal, '已暂停目标');
+                case 'resumeGoal':
+                  _runGoalCommand(widget.app.resumeGoal, '已恢复目标');
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'compact',
+                child: ListTile(
+                  leading: Icon(Icons.compress),
+                  title: Text('压缩会话'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'model',
+                child: ListTile(
+                  leading: Icon(Icons.tune),
+                  title: Text('切换模型'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'pauseGoal',
+                child: ListTile(
+                  leading: Icon(Icons.pause_circle_outline),
+                  title: Text('暂停目标'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'resumeGoal',
+                child: ListTile(
+                  leading: Icon(Icons.play_circle_outline),
+                  title: Text('恢复目标'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -448,6 +520,63 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Model / thought-level switch sheet ----------
 
+  /// Runs a goal command (pause/resume) with a success snackbar; the desktop
+  /// rejects the command with a clear error when no goal is active.
+  Future<void> _runGoalCommand(
+    Future<Map<String, Object?>> Function() command,
+    String successText,
+  ) async {
+    try {
+      await command().timeout(const Duration(seconds: 15));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(successText)));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('目标操作失败：$e')));
+      }
+    }
+  }
+
+  Future<void> _confirmCompact() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('压缩会话'),
+        content: const Text('将把此前的对话历史总结为摘要，以节省上下文空间。压缩后旧消息不再保留，此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('压缩'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.app.compact().timeout(const Duration(seconds: 15));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已发送压缩请求')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('压缩失败：$e')));
+      }
+    }
+  }
+
   Future<void> _showModelConfigSheet() async {
     final state = _state;
     if (state == null) return;
@@ -460,6 +589,17 @@ class _ConversationPageState extends State<ConversationPage> {
         config.availableThoughtLevels.isEmpty) {
       return;
     }
+    // Collaboration-mode options prefer prepareWorkspace's configOptions;
+    // fall back to the desktop's canonical sets. The current mode comes from
+    // the session's readSession settings (`settings.mode.current`), which is
+    // more accurate than the workspace-level prepareWorkspace value.
+    final prep = await widget.app.fetchWorkspacePrep();
+    final modeOptions = _prepOptionValues(
+        prep, const ['mode', 'collaborationMode'],
+        const ['build', 'edit', 'plan', 'yolo']);
+    final currentMode =
+        config.mode ?? _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
+    if (!mounted) return;
     return showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -471,6 +611,19 @@ class _ConversationPageState extends State<ConversationPage> {
         config: config,
         autoClose: false,
         subtitle: '选择后立即应用于当前会话',
+        modeOptions: modeOptions,
+        currentMode: currentMode,
+        onModeChanged: (mode) async {
+          try {
+            await widget.app.switchCollaborationMode(mode);
+          } catch (e) {
+            if (sheetContext.mounted) {
+              ScaffoldMessenger.of(sheetContext).showSnackBar(
+                SnackBar(content: Text('切换模式失败：$e')),
+              );
+            }
+          }
+        },
         onApply: (provider, model, thoughtLevel) async {
           try {
             await widget.app.switchModel(provider, model,
@@ -487,7 +640,309 @@ class _ConversationPageState extends State<ConversationPage> {
     );
   }
 
+  /// Config-option values by id from `prepareWorkspace`, else [fallback].
+  List<String> _prepOptionValues(
+      WorkspacePrep? prep, List<String> ids, List<String> fallback) {
+    if (prep != null) {
+      for (final id in ids) {
+        final option = prep.option(id);
+        if (option != null && option.options.isNotEmpty) {
+          return option.options.map((o) => o.value).toList();
+        }
+      }
+    }
+    return fallback;
+  }
+
+  /// The option's current value (workspace-level mode/followup), if any.
+  String? _prepCurrentValue(WorkspacePrep? prep, List<String> ids) {
+    if (prep == null) return null;
+    for (final id in ids) {
+      final option = prep.option(id);
+      if (option != null) {
+        final v = option.currentValue;
+        if (v is String && v.isNotEmpty) return v;
+      }
+    }
+    return null;
+  }
+
   // ---------- Input bar ----------
+
+  // ---------- Slash command / skills suggestion panel ----------
+
+  final _inputFocusNode = FocusNode();
+  List<SlashCommand>? _slashCommands;
+  List<SkillEntry>? _skills;
+  bool _prepLoading = false;
+  String? _activeSuggestionPrefix; // the '/' or '$' token currently typed
+
+  /// The last whitespace-delimited token of the composer text.
+  String _currentToken(String text) {
+    final lastSpace = text.lastIndexOf(RegExp(r'\s'));
+    return lastSpace == -1 ? text : text.substring(lastSpace + 1);
+  }
+
+  void _onInputChanged(String text) {
+    final token = _currentToken(text);
+    if (token.startsWith('/')) {
+      _activeSuggestionPrefix = token;
+      _loadPrepIfNeeded();
+    } else if (token.startsWith(r'$')) {
+      _activeSuggestionPrefix = token;
+      _loadSkillsIfNeeded();
+    } else {
+      _activeSuggestionPrefix = null;
+    }
+    setState(() {});
+  }
+
+  Future<void> _loadPrepIfNeeded() async {
+    if (_slashCommands != null || _prepLoading) return;
+    _prepLoading = true;
+    final prep = await widget.app.fetchWorkspacePrep();
+    _slashCommands = prep?.slashCommands ?? const [];
+    _prepLoading = false;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadSkillsIfNeeded() async {
+    if (_skills != null || _prepLoading) return;
+    _prepLoading = true;
+    _skills = await widget.app.fetchSkills();
+    _prepLoading = false;
+    if (mounted) setState(() {});
+  }
+
+  void _applySuggestion(String replacement) {
+    final text = _inputController.text;
+    final token = _currentToken(text);
+    final prefixEnd = text.length - token.length;
+    _inputController.text = '${text.substring(0, prefixEnd)}$replacement ';
+    _inputController.selection =
+        TextSelection.collapsed(offset: _inputController.text.length);
+    _activeSuggestionPrefix = null;
+    setState(() {});
+    _inputFocusNode.requestFocus();
+  }
+
+  Widget? _buildSuggestionPanel() {
+    final prefix = _activeSuggestionPrefix;
+    if (prefix == null) return null;
+    final items = <Widget>[];
+    if (prefix.startsWith('/')) {
+      final query = prefix.substring(1);
+      for (final cmd in _slashCommands ?? const <SlashCommand>[]) {
+        if (!cmd.name.startsWith(query)) continue;
+        items.add(ListTile(
+          dense: true,
+          leading: const Icon(Icons.sell_outlined, size: 20),
+          title: Text('/${cmd.name}'),
+          subtitle: cmd.description.isEmpty
+              ? null
+              : Text(cmd.description,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+          onTap: () => _applySuggestion('/${cmd.name}'),
+        ));
+      }
+    } else if (prefix.startsWith(r'$')) {
+      final query = prefix.substring(1);
+      for (final skill in _skills ?? const <SkillEntry>[]) {
+        if (!skill.name.startsWith(query)) continue;
+        items.add(ListTile(
+          dense: true,
+          leading: const Icon(Icons.auto_awesome, size: 20),
+          title: Text('\$${skill.name}'),
+          subtitle: skill.description == null
+              ? null
+              : Text(skill.description!,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+          onTap: () => _applySuggestion('\$${skill.name}'),
+        ));
+      }
+    }
+    if (items.isEmpty) {
+      if (_prepLoading) {
+        return const Padding(
+          padding: EdgeInsets.all(12),
+          child: Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+    return Material(
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 260),
+        child: ListView(shrinkWrap: true, children: items),
+      ),
+    );
+  }
+
+  // ---------- Attachments ----------
+
+  String _mimeFor(String name) {
+    final ext = name.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'pdf':
+        return 'application/pdf';
+      case 'txt':
+        return 'text/plain';
+      case 'md':
+        return 'text/markdown';
+      case 'json':
+        return 'application/json';
+      case 'zip':
+        return 'application/zip';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
+  Future<void> _pickAttachment() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('从相册选择图片'),
+              onTap: () => Navigator.pop(sheetContext, 'image'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: const Text('选择文件'),
+              onTap: () => Navigator.pop(sheetContext, 'file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    try {
+      if (choice == 'image') {
+        final picked = await ImagePicker()
+            .pickImage(source: ImageSource.gallery, maxWidth: 2048);
+        if (picked == null || !mounted) return;
+        await _uploadAttachment(
+          name: picked.name,
+          mime: _mimeFor(picked.name),
+          bytes: await picked.readAsBytes(),
+        );
+      } else {
+        final files = await FilePicker.pickFiles();
+        final file = files.isEmpty ? null : files.first;
+        if (file == null || !mounted) return;
+        await _uploadAttachment(
+          name: file.name,
+          mime: _mimeFor(file.name),
+          bytes: await file.readAsBytes(),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('选择附件失败：$e')));
+      }
+    }
+  }
+
+  Future<void> _uploadAttachment({
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+  }) async {
+    final sessionId = widget.app.conversation?.state?.sessionId;
+    if (sessionId == null) return;
+    setState(() {
+      _uploading = true;
+      _uploadingName = name;
+      _uploadProgress = 0;
+    });
+    try {
+      final descriptor = await widget.app.uploadAttachment(
+        sessionId,
+        fileName: name,
+        mime: mime,
+        bytes: bytes,
+        onProgress: (p) {
+          if (mounted) setState(() => _uploadProgress = p);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _attachments.add(descriptor);
+        _uploading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _uploading = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('上传失败：$e')));
+      }
+    }
+  }
+
+  /// Pending-attachment chips + in-flight upload progress, shown above the
+  /// composer while anything is staged.
+  Widget? _buildAttachmentBar() {
+    if (_attachments.isEmpty && !_uploading) return null;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final a in _attachments)
+          InputChip(
+            label: Text(a['fileName']?.toString() ?? '附件'),
+            avatar: (a['mime']?.toString().startsWith('image/') ?? false)
+                ? const Icon(Icons.image_outlined, size: 18)
+                : const Icon(Icons.insert_drive_file_outlined, size: 18),
+            onDeleted: () => setState(() => _attachments.remove(a)),
+          ),
+        if (_uploading)
+          SizedBox(
+            width: 220,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _uploadingName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LinearProgressIndicator(value: _uploadProgress),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 
   Widget _buildInputBar() {
     final state = _state;
@@ -495,40 +950,65 @@ class _ConversationPageState extends State<ConversationPage> {
     // readSession's session.status (2s poll) is the authority; control.canStop
     // only arrives with event-push snapshots and unions in if present.
     final generating = state != null && state.isAgentRunning;
+    final panel = _buildSuggestionPanel();
+    final attachmentBar = _buildAttachmentBar();
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            if (generating)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: IconButton.filledTonal(
-                  tooltip: '打断',
-                  onPressed: _stop,
-                  icon: const Icon(Icons.stop),
+            if (panel != null) ...[
+              panel,
+              const SizedBox(height: 6),
+            ],
+            if (attachmentBar != null) ...[
+              attachmentBar,
+              const SizedBox(height: 6),
+            ],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (generating)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton.filledTonal(
+                      tooltip: '打断',
+                      onPressed: _stop,
+                      icon: const Icon(Icons.stop),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: IconButton.filledTonal(
+                    tooltip: '添加附件',
+                    onPressed: _sending || _uploading ? null : _pickAttachment,
+                    icon: const Icon(Icons.attach_file),
+                  ),
                 ),
-              ),
-            Expanded(
-              child: TextField(
-                controller: _inputController,
-                minLines: 1,
-                maxLines: 6,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
-                  hintText: '给 agent 发消息…',
-                  isDense: true,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    focusNode: _inputFocusNode,
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.send,
+                    onChanged: _onInputChanged,
+                    onSubmitted: (_) => _send(),
+                    decoration: const InputDecoration(
+                      hintText: '给 agent 发消息…',
+                      isDense: true,
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton.filled(
-              onPressed: _sending ? null : _send,
-              icon: const Icon(Icons.send),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _sending ? null : _send,
+                  icon: const Icon(Icons.send),
+                ),
+              ],
             ),
           ],
         ),
@@ -542,14 +1022,20 @@ class _ConversationPageState extends State<ConversationPage> {
       {int? nextCreatedAt}) {
     switch (row) {
       case UserInputRow():
-        return _UserBubble(text: row.text);
+        return _LongPressRow(
+          onLongPress: () => _showRowActions(row),
+          child: _UserBubble(row: row, app: widget.app),
+        );
       case AssistantTextRow():
         if (row.text.trim().isEmpty) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
-          child: _MarkdownText(
-            text: row.text,
-            color: RowColors.assistant(context),
+          child: _LongPressRow(
+            onLongPress: () => _showRowActions(row),
+            child: _MarkdownText(
+              text: row.text,
+              color: RowColors.assistant(context),
+            ),
           ),
         );
       case ReasoningRow():
@@ -580,6 +1066,117 @@ class _ConversationPageState extends State<ConversationPage> {
         return const SizedBox.shrink();
       default:
         return const SizedBox.shrink();
+    }
+  }
+
+  // ---------- Row long-press actions (retry / edit) ----------
+
+  /// Long-press on a user or assistant row offers row-target commands.
+  Future<void> _showRowActions(ConversationRow row) async {
+    final List<Widget> actions = [
+      if (row is UserInputRow)
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('编辑重发'),
+          subtitle: Text(
+            row.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          onTap: () {
+            Navigator.of(context).pop();
+            _editUserQuery(row);
+          },
+        ),
+      if (row is AssistantTextRow)
+        ListTile(
+          leading: const Icon(Icons.refresh),
+          title: const Text('重试回合'),
+          subtitle: Text(
+            row.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          onTap: () {
+            Navigator.of(context).pop();
+            _retryTurn(row);
+          },
+        ),
+    ];
+    if (actions.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: actions,
+      )),
+    );
+  }
+
+  Map<String, Object?> _rowTarget(ConversationRow row) => {
+        'rowId': row.rowId,
+        if (row.entityId != null) 'entityId': row.entityId,
+      };
+
+  Future<void> _retryTurn(AssistantTextRow row) async {
+    try {
+      await widget.app
+          .retryTurn(_rowTarget(row))
+          .timeout(const Duration(seconds: 15));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已重新执行该回合')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('重试失败：$e')));
+      }
+    }
+  }
+
+  Future<void> _editUserQuery(UserInputRow row) async {
+    final controller = TextEditingController(text: row.text);
+    final newText = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('编辑重发'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 8,
+          decoration: const InputDecoration(hintText: '修改后的指令'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('重发'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newText == null || newText.trim().isEmpty) return;
+    try {
+      await widget.app
+          .editUserQuery(_rowTarget(row), newText)
+          .timeout(const Duration(seconds: 15));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已重新发送')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('重发失败：$e')));
+      }
     }
   }
 
@@ -684,6 +1281,45 @@ Widget _statusIcon(BuildContext context, String status, IconData icon) {
 
 // ---------- Row widgets ----------
 
+/// Wraps a conversation row so a long-press opens the row action menu.
+/// Implemented with a [Listener] timer instead of `GestureDetector.onLongPress`
+/// — the latter loses the gesture arena to the row's `SelectableText` text
+/// selection (long-press then only selects text and the menu never opens).
+/// Taps still reach the child untouched.
+class _LongPressRow extends StatefulWidget {
+  final VoidCallback onLongPress;
+  final Widget child;
+  const _LongPressRow({required this.onLongPress, required this.child});
+
+  @override
+  State<_LongPressRow> createState() => _LongPressRowState();
+}
+
+class _LongPressRowState extends State<_LongPressRow> {
+  Timer? _timer;
+
+  void _onPointerDown(PointerDownEvent event) {
+    _timer?.cancel();
+    _timer = Timer(const Duration(milliseconds: 500), widget.onLongPress);
+  }
+
+  void _cancel() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: _onPointerDown,
+      onPointerUp: (_) => _cancel(),
+      onPointerCancel: (_) => _cancel(),
+      behavior: HitTestBehavior.opaque,
+      child: widget.child,
+    );
+  }
+}
+
 class _MarkdownText extends StatelessWidget {
   final String text;
   final Color color;
@@ -724,12 +1360,15 @@ class _MarkdownText extends StatelessWidget {
 }
 
 class _UserBubble extends StatelessWidget {
-  final String text;
-  const _UserBubble({required this.text});
+  final UserInputRow row;
+  final AppController app;
+  const _UserBubble({required this.row, required this.app});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final text = row.text;
+    final attachments = row.attachments;
     return Align(
       alignment: Alignment.centerRight,
       child: ConstrainedBox(
@@ -743,13 +1382,174 @@ class _UserBubble extends StatelessWidget {
             color: scheme.primaryContainer,
             borderRadius: BorderRadius.circular(16),
           ),
-          child: SelectableText(
-            text,
-            style: TextStyle(
-              color: scheme.onPrimaryContainer,
-              height: 1.4,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (attachments.isNotEmpty) ...[
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final a in attachments)
+                      _AttachmentThumb(attachment: a, app: app),
+                  ],
+                ),
+                if (text.isNotEmpty) const SizedBox(height: 6),
+              ],
+              if (text.isNotEmpty)
+                SelectableText(
+                  text,
+                  style: TextStyle(
+                    color: scheme.onPrimaryContainer,
+                    height: 1.4,
+                  ),
+                ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// In-chat attachment badge: a small tag (icon + file name) that opens a
+/// full-size preview dialog on tap (images load via `attachmentReadV4` with
+/// a page-level bytes cache).
+class _AttachmentThumb extends StatefulWidget {
+  final RowAttachment attachment;
+  final AppController app;
+  const _AttachmentThumb({required this.attachment, required this.app});
+
+  @override
+  State<_AttachmentThumb> createState() => _AttachmentThumbState();
+}
+
+class _AttachmentThumbState extends State<_AttachmentThumb> {
+  Uint8List? _bytes;
+  bool _loading = false;
+
+  Future<Uint8List?> _load() async {
+    if (_bytes != null) return _bytes;
+    if (_loading) return null;
+    _loading = true;
+    try {
+      final cache = _ConversationPageState.attachmentCache;
+      final ref = widget.attachment.previewRef ?? widget.attachment.ref;
+      final cached = cache[ref];
+      if (cached != null) {
+        _bytes = cached;
+        return cached;
+      }
+      final bytes = await widget.app.readAttachment(ref);
+      if (bytes != null) cache[ref] = bytes;
+      if (mounted) setState(() => _bytes = bytes);
+      return bytes;
+    } finally {
+      // Reset so a failed read can be retried on the next tap.
+      _loading = false;
+    }
+  }
+
+  Future<void> _showPreview() async {
+    final a = widget.attachment;
+    if (!a.isImage) {
+      // Non-image: simple info dialog.
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(a.fileName),
+          content: Text(
+            '类型：${a.mime}\n大小：${_formatBytes(a.bytes)}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    // Image: load (with cache) then show a zoomable preview dialog.
+    final bytes = await _load();
+    if (!mounted || bytes == null) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.black87,
+        insetPadding: const EdgeInsets.all(12),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                maxScale: 6,
+                child: Center(
+                  child: Image.memory(bytes, fit: BoxFit.contain),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                tooltip: '关闭',
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              bottom: 8,
+              child: Text(
+                a.fileName,
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final a = widget.attachment;
+    final icon = a.isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined;
+    return InkWell(
+      onTap: _showPreview,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
+              child: Text(
+                a.fileName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "dev.ijkzen.zcode_remote"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker (attachment picker) requires compileSdk 36.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

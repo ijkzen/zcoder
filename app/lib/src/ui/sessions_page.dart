@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
+import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'conversation_page.dart';
 import 'model_config_sheet.dart';
@@ -20,6 +21,14 @@ class _SessionsPageState extends State<SessionsPage> {
   final _inputController = TextEditingController();
   bool _sending = false;
 
+  /// Task-list view: 0 = all, 1 = pinned, 2 = archived.
+  int _tab = 0;
+
+  /// Search box toggled from the AppBar (hidden in multi-select mode).
+  bool _searching = false;
+  final _searchController = TextEditingController();
+  String get _query => _searchController.text.trim();
+
   /// The workspace's model registry, loaded on page open (also used by the
   /// picker and to render the fixed model label above the input bar).
   SessionModelConfig? _workspaceConfig;
@@ -32,6 +41,10 @@ class _SessionsPageState extends State<SessionsPage> {
   String? _draftModel;
   String? _draftThought;
 
+  /// Collaboration mode for the next created session (from the workspace's
+  /// prepareWorkspace configOptions).
+  String? _draftMode;
+
   @override
   void initState() {
     super.initState();
@@ -42,6 +55,7 @@ class _SessionsPageState extends State<SessionsPage> {
   @override
   void dispose() {
     _inputController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -96,6 +110,17 @@ class _SessionsPageState extends State<SessionsPage> {
         config.availableThoughtLevels.isEmpty) {
       return;
     }
+    // Collaboration-mode options + workspace current values come from
+    // prepareWorkspace's configOptions (fall back to canonical sets); the
+    // workspace-level mode from readWorkspaceState settings wins when present.
+    final prep = await widget.app.fetchWorkspacePrep();
+    final modeOptions = _prepOptionValues(
+        prep, const ['mode', 'collaborationMode'],
+        const ['build', 'edit', 'plan', 'yolo']);
+    final currentMode = _draftMode ??
+        config.mode ??
+        _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
+    if (!mounted) return;
     final baseConfig = config;
     showModalBottomSheet<void>(
       context: context,
@@ -106,6 +131,12 @@ class _SessionsPageState extends State<SessionsPage> {
         config: _draftConfig(baseConfig),
         subtitle: '仅用于本次创建的新会话',
         autoClose: false,
+        modeOptions: modeOptions,
+        currentMode: currentMode,
+        onModeChanged: (mode) async {
+          if (!mounted) return;
+          setState(() => _draftMode = mode);
+        },
         onApply: (provider, model, thoughtLevel) async {
           if (!mounted) return;
           setState(() {
@@ -143,19 +174,6 @@ class _SessionsPageState extends State<SessionsPage> {
     );
   }
 
-  /// Drops the persisted selection — new sessions fall back to the workspace
-  /// defaults again.
-  Future<void> _clearDraft() async {
-    setState(() {
-      _draftProvider = null;
-      _draftModel = null;
-      _draftThought = null;
-    });
-    try {
-      await widget.app.clearWorkspaceModelPrefs(widget.workspace.workspaceKey);
-    } catch (_) {}
-  }
-
   Future<void> _createSession() async {
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
@@ -167,6 +185,7 @@ class _SessionsPageState extends State<SessionsPage> {
             provider: _draftProvider,
             model: _draftModel,
             thoughtLevel: _draftThought,
+            mode: _draftMode,
           )
           .timeout(const Duration(seconds: 15));
       _inputController.clear();
@@ -322,6 +341,179 @@ class _SessionsPageState extends State<SessionsPage> {
 
   // ---------- Model label above the input (always visible) ----------
 
+  /// Config-option values by id from `prepareWorkspace`, else [fallback].
+  List<String> _prepOptionValues(
+      WorkspacePrep? prep, List<String> ids, List<String> fallback) {
+    if (prep != null) {
+      for (final id in ids) {
+        final option = prep.option(id);
+        if (option != null && option.options.isNotEmpty) {
+          return option.options.map((o) => o.value).toList();
+        }
+      }
+    }
+    return fallback;
+  }
+
+  /// The option's current value (workspace-level mode/followup), if any.
+  String? _prepCurrentValue(WorkspacePrep? prep, List<String> ids) {
+    if (prep == null) return null;
+    for (final id in ids) {
+      final option = prep.option(id);
+      if (option != null) {
+        final v = option.currentValue;
+        if (v is String && v.isNotEmpty) return v;
+      }
+    }
+    return null;
+  }
+
+  /// Sessions of the active tab, filtered by the search query.
+  List<Workspace> _visibleSessions() {
+    final List<Workspace> base = switch (_tab) {
+      1 => widget.app.pinnedSessions,
+      2 => widget.app.archivedSessions,
+      _ => widget.app.sessions,
+    };
+    final query = _query.toLowerCase();
+    if (query.isEmpty) return base;
+    return base
+        .where((s) => (s.taskTitle ?? '').toLowerCase().contains(query))
+        .toList();
+  }
+
+  Widget _buildTabs() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(
+            value: 0,
+            label: Text('全部'),
+            icon: Icon(Icons.forum_outlined, size: 16),
+          ),
+          ButtonSegment(
+            value: 1,
+            label: Text('置顶'),
+            icon: Icon(Icons.push_pin_outlined, size: 16),
+          ),
+          ButtonSegment(
+            value: 2,
+            label: Text('已归档'),
+            icon: Icon(Icons.archive_outlined, size: 16),
+          ),
+        ],
+        selected: {_tab},
+        showSelectedIcon: false,
+        onSelectionChanged: (selection) => setState(() {
+          _tab = selection.first;
+          _searching = false;
+        }),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: TextField(
+        controller: _searchController,
+        autofocus: true,
+        onChanged: (_) => setState(() {}),
+        decoration: InputDecoration(
+          hintText: '搜索会话标题…',
+          isDense: true,
+          prefixIcon: const Icon(Icons.search, size: 18),
+          suffixIcon: IconButton(
+            tooltip: '清除',
+            icon: const Icon(Icons.close, size: 16),
+            onPressed: () {
+              _searchController.clear();
+              setState(() {});
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _togglePin(Workspace session) async {
+    final taskId = session.taskId;
+    if (taskId == null) return;
+    try {
+      await widget.app.setTaskPinned(taskId, pinned: !session.pinned);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(session.pinned ? '已取消置顶' : '已置顶')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('操作失败：$e')));
+      }
+    }
+  }
+
+  Future<void> _unarchiveSession(Workspace session, String title) async {
+    try {
+      await widget.app.unarchiveSession(session.taskId!);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已恢复「$title」')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('恢复失败：$e')));
+      }
+    }
+  }
+
+  /// 输入框上方的提示行：模型 · 思考等级 · 协作模式（纯值，无图标）。
+  /// 模型部分草稿优先；协作模式取草稿或项目的当前值
+  /// （readWorkspaceState settings.mode.current）。
+  Widget _buildModelLabel(ColorScheme scheme) {
+    final hasDraft = _draftProvider != null ||
+        _draftModel != null ||
+        _draftThought != null;
+    final String modelText;
+    if (hasDraft) {
+      modelText = [
+        _providerDisplay(_draftProvider),
+        _draftModel,
+        _draftThought,
+      ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+    } else {
+      final cfg = _workspaceConfig;
+      modelText = (cfg == null || (cfg.model == null && cfg.thoughtLevel == null))
+          ? '工作区默认'
+          : [
+              _providerDisplay(cfg.provider),
+              cfg.model,
+              cfg.thoughtLevel,
+            ].whereType<String>().join(' · ');
+    }
+    final mode = _draftMode ?? _workspaceConfig?.mode;
+    final modeText =
+        (mode == null || mode.isEmpty) ? '' : ' · $mode';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          '$modelText$modeText',
+          style: Theme.of(context)
+              .textTheme
+              .labelSmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+
   /// Display name for a provider id, from the workspace registry.
   String? _providerDisplay(String? providerId) {
     if (providerId == null) return null;
@@ -336,56 +528,6 @@ class _SessionsPageState extends State<SessionsPage> {
       }
     }
     return providerId;
-  }
-
-  Widget _buildModelLabel(ColorScheme scheme) {
-    final hasDraft = _draftProvider != null ||
-        _draftModel != null ||
-        _draftThought != null;
-    final String text;
-    if (hasDraft) {
-      text = [
-        _providerDisplay(_draftProvider),
-        _draftModel,
-        _draftThought,
-      ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
-    } else {
-      final cfg = _workspaceConfig;
-      text = (cfg == null || (cfg.model == null && cfg.thoughtLevel == null))
-          ? '工作区默认'
-          : [
-              _providerDisplay(cfg.provider),
-              cfg.model,
-              cfg.thoughtLevel,
-            ].whereType<String>().join(' · ');
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
-      child: Row(
-        children: [
-          Icon(Icons.tune, size: 14, color: scheme.primary),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              '新会话将使用：$text',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (hasDraft)
-            IconButton(
-              tooltip: '清除，改用工作区默认',
-              onPressed: _clearDraft,
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.close, size: 16),
-            ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -431,8 +573,16 @@ class _SessionsPageState extends State<SessionsPage> {
               ]
             : [
                 IconButton(
+                  tooltip: '搜索会话',
+                  onPressed: () => setState(() => _searching = !_searching),
+                  icon: const Icon(Icons.search),
+                ),
+                IconButton(
                   tooltip: '批量归档',
-                  onPressed: () => setState(() => _multiSelect = true),
+                  onPressed: () => setState(() {
+                    _multiSelect = true;
+                    _tab = 0;
+                  }),
                   icon: const Icon(Icons.checklist),
                 ),
                 IconButton(
@@ -446,11 +596,15 @@ class _SessionsPageState extends State<SessionsPage> {
       // rides up with the IME exactly like the conversation page does.
       body: Column(
         children: [
+          if (!_multiSelect) ...[
+            if (_searching) _buildSearchBar(),
+            _buildTabs(),
+          ],
           Expanded(
             child: ListenableBuilder(
               listenable: widget.app,
               builder: (context, _) {
-                final sessions = widget.app.sessions;
+                final sessions = _visibleSessions();
                 if (sessions.isEmpty) {
                   return Center(
                     child: Padding(
@@ -458,19 +612,29 @@ class _SessionsPageState extends State<SessionsPage> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.forum_outlined,
-                              size: 56, color: scheme.outline),
+                          Icon(
+                            _tab == 2
+                                ? Icons.archive_outlined
+                                : Icons.forum_outlined,
+                            size: 56,
+                            color: scheme.outline,
+                          ),
                           const SizedBox(height: 12),
                           Text(
-                            '这个工作区还没有会话',
+                            _tab == 2
+                                ? '没有已归档的会话'
+                                : (_query.isNotEmpty
+                                    ? '没有匹配的会话'
+                                    : '这个工作区还没有会话'),
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 8),
-                          Text(
-                            '在下方输入框直接开始一个新任务',
-                            style:
-                                TextStyle(color: scheme.onSurfaceVariant),
-                          ),
+                          if (_tab != 2 && _query.isEmpty)
+                            Text(
+                              '在下方输入框直接开始一个新任务',
+                              style:
+                                  TextStyle(color: scheme.onSurfaceVariant),
+                            ),
                         ],
                       ),
                     ),
@@ -518,12 +682,64 @@ class _SessionsPageState extends State<SessionsPage> {
                                 ),
                               ),
                         title: Text(title,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            // Unread sessions render bold with a dot.
+                            style: (s.unreadAt != null && _tab != 2)
+                                ? const TextStyle(fontWeight: FontWeight.w700)
+                                : null),
                         subtitle: Text(
                           running ? '运行中' : '已完成',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        // Archived tab: restore button; otherwise the unread
+                        // dot (multi-select mode hides both).
+                        trailing: _multiSelect
+                            ? null
+                            : (_tab == 2
+                                ? IconButton(
+                                    tooltip: '取消归档',
+                                    onPressed: () =>
+                                        _unarchiveSession(s, title),
+                                    icon: const Icon(Icons.unarchive_outlined),
+                                  )
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (s.unreadAt != null)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(right: 8),
+                                          child: Icon(Icons.circle,
+                                              size: 8, color: scheme.primary),
+                                        ),
+                                      PopupMenuButton<String>(
+                                        tooltip: '更多操作',
+                                        onSelected: (value) {
+                                          if (value == 'pin') {
+                                            _togglePin(s);
+                                          }
+                                        },
+                                        itemBuilder: (context) => [
+                                          PopupMenuItem(
+                                            value: 'pin',
+                                            child: ListTile(
+                                              leading: Icon(
+                                                  s.pinned
+                                                      ? Icons.push_pin_outlined
+                                                      : Icons.push_pin,
+                                                  size: 20),
+                                              title: Text(s.pinned
+                                                  ? '取消置顶'
+                                                  : '置顶'),
+                                              contentPadding: EdgeInsets.zero,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  )),
                         onTap: _multiSelect
                             ? () => setState(() {
                                   if (!_selectedIds.remove(id)) {
@@ -549,7 +765,7 @@ class _SessionsPageState extends State<SessionsPage> {
                                 }),
                       ),
                     );
-                    if (_multiSelect) return card;
+                    if (_multiSelect || _tab == 2) return card;
                     return _SwipeActionTile(
                       onRename: () => _renameSession(s, title),
                       onArchive: () => _archiveSession(s, title),

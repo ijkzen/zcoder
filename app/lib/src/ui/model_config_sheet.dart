@@ -23,12 +23,21 @@ class ModelConfigSheet extends StatefulWidget {
   /// picker keeps it open so the user can adjust, then confirms via 完成.
   final bool autoClose;
 
+  /// Collaboration-mode chips (build/edit/plan/yolo). Only shown when
+  /// [onModeChanged] is provided (the open-conversation switcher).
+  final List<String> modeOptions;
+  final String? currentMode;
+  final Future<void> Function(String mode)? onModeChanged;
+
   const ModelConfigSheet({
     super.key,
     required this.config,
     required this.onApply,
     this.subtitle,
     this.autoClose = true,
+    this.modeOptions = const ['build', 'edit', 'plan', 'yolo'],
+    this.currentMode,
+    this.onModeChanged,
   });
 
   @override
@@ -52,6 +61,10 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
   ModelOption? _model;
   String? _thought;
   bool _busy = false;
+
+  /// Locally selected collaboration mode (optimistic: the chip highlights
+  /// immediately; the caller persists via onModeChanged).
+  String? _mode;
 
   List<_ProviderGroup> get _providers {
     final byProvider = <String, List<ModelOption>>{};
@@ -182,6 +195,15 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
+            if (widget.onModeChanged != null) ...[
+              const SizedBox(height: 10),
+              _modeChips(
+                label: '协作模式',
+                options: widget.modeOptions,
+                current: widget.currentMode,
+                onChanged: widget.onModeChanged,
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
               '第 ${_level + 1} 级 · 选择${_levels[_level]}',
@@ -221,6 +243,58 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
       if (p.providerId == providerId) return p.label;
     }
     return providerId;
+  }
+
+  /// One chip row (collaboration mode). Applies immediately (optimistic
+  /// selection); failures surface via the caller's snackbar.
+  Widget _modeChips({
+    required String label,
+    required List<String> options,
+    required String? current,
+    Future<void> Function(String mode)? onChanged,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final handler = onChanged;
+    final selectedMode = _mode ?? current;
+    return Row(
+      children: [
+        Text(
+          label,
+          style: Theme.of(context)
+              .textTheme
+              .labelMedium
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              for (final mode in options)
+                ChoiceChip(
+                  label: Text(mode),
+                  selected: mode == selectedMode,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: _busy || mode == selectedMode || handler == null
+                      ? null
+                      : (selected) async {
+                          setState(() {
+                            _busy = true;
+                            _mode = mode;
+                          });
+                          try {
+                            await handler(mode);
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _providerList(ColorScheme scheme) {

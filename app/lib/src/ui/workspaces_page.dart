@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_controller.dart';
 import '../bridge/bridge_manager.dart';
 import '../protocol/topics/topic_models.dart';
+import '../protocol/zlog.dart';
 import 'project_avatar.dart';
 import 'sessions_page.dart';
 
@@ -113,14 +114,28 @@ class _WorkspacesPageState extends State<WorkspacesPage> {
   bool _deleting = false;
 
   Future<void> _open(BuildContext context, ProjectGroup project) async {
-    await app.selectWorkspace(project.representative);
+    zlog('[_open] enter phase=${app.phase} key=${project.workspaceKey}');
+    try {
+      await app.selectWorkspace(project.representative);
+      zlog('[_open] selectWorkspace returned, phase=${app.phase} '
+          'lastError=${app.lastError}');
+    } catch (e) {
+      zlog('[_open] selectWorkspace threw: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('打开项目失败：$e')),
+      );
+      return;
+    }
     if (!context.mounted) return;
     if (app.phase != BridgePhase.ready) {
+      zlog('[_open] phase check failed: ${app.phase} (need ready)');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('打开项目失败：${app.lastError ?? '未知错误'}')),
       );
       return;
     }
+    zlog('[_open] pushing SessionsPage');
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) =>
           SessionsPage(app: app, workspace: project.representative),

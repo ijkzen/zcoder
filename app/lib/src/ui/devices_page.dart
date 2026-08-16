@@ -8,6 +8,8 @@ import '../storage/app_database.dart';
 import 'conversation_page.dart';
 import 'scan_page.dart';
 import 'workspaces_page.dart';
+import 'model_providers_page.dart';
+import 'log_page.dart';
 
 /// Screen 1: the paired devices list. Scan a QR to add a device, tap a device
 /// to connect, long-press to rename, swipe to remove.
@@ -197,6 +199,40 @@ class _DevicesPageState extends State<DevicesPage> {
                 ),
               ),
             ),
+          // 低频入口统一收在二级菜单：模型提供商管理、协议日志。
+          PopupMenuButton<String>(
+            tooltip: '更多',
+            onSelected: (value) {
+              switch (value) {
+                case 'providers':
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => ModelProvidersPage(app: widget.app),
+                  ));
+                case 'logs':
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const ProtocolLogPage(),
+                  ));
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'providers',
+                child: ListTile(
+                  leading: Icon(Icons.dns_outlined),
+                  title: Text('模型提供商'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'logs',
+                child: ListTile(
+                  leading: Icon(Icons.terminal),
+                  title: Text('协议日志'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(

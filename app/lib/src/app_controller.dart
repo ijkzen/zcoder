@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint;
 
@@ -12,6 +13,8 @@ import 'protocol/core/random_ids.dart' as ids;
 import 'bridge/bridge_manager.dart';
 import 'protocol/relay/relay_client.dart';
 import 'protocol/relay/relay_frame.dart';
+import 'protocol/services/services.dart';
+import 'protocol/zlog.dart';
 import 'session/conversation_controller.dart';
 import 'protocol/topics/topic_models.dart';
 import 'storage/app_database.dart';
@@ -135,12 +138,17 @@ class AppController extends ChangeNotifier {
   /// to the project list and into the same project doesn't re-open the bridge.
   Future<void> selectWorkspace(Workspace workspace) async {
     final bridge = _bridge;
-    if (bridge == null) return;
+    zlog('[_selectWorkspace] enter phase=$_phase bridge=${bridge != null}');
+    if (bridge == null) {
+      throw StateError('未连接桌面端');
+    }
     if (_phase == BridgePhase.ready &&
         bridge.activeWorkspace?.workspaceKey == workspace.workspaceKey) {
+      zlog('[_selectWorkspace] early return (already ready)');
       return;
     }
     await bridge.selectWorkspace(workspace);
+    zlog('[_selectWorkspace] bridge done, phase=$_phase');
     notifyListeners();
   }
 
@@ -148,7 +156,8 @@ class AppController extends ChangeNotifier {
 
   /// Sessions of the active workspace, sourced from the workspace-list
   /// `tasks` payload (the desktop's own task list — this is what the web
-  /// client renders, not the sessions-index topic).
+  /// client renders, not the sessions-index topic). Archived tasks are kept
+  /// out of the default list (the Archived tab filters them in).
   List<Workspace> get sessions {
     final workspace = _bridge?.activeWorkspace;
     if (workspace == null) return const [];
@@ -157,10 +166,65 @@ class AppController extends ChangeNotifier {
             w.taskId != null &&
             !w.archived &&
             w.workspaceKey == workspace.workspaceKey)
-        .toList();
+        .toList()
+      ..sort((a, b) {
+        if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+        return (b.updatedAt ?? b.createdAt ?? 0)
+            .compareTo(a.updatedAt ?? a.createdAt ?? 0);
+      });
+  }
+
+  /// Pinned sessions of the active workspace.
+  List<Workspace> get pinnedSessions =>
+      sessions.where((w) => w.pinned).toList();
+
+  /// Archived sessions of the active workspace (hidden from the default
+  /// list; the Archived tab browses and unarchives them).
+  List<Workspace> get archivedSessions {
+    final workspace = _bridge?.activeWorkspace;
+    if (workspace == null) return const [];
+    return _workspaces
+        .where((w) =>
+            w.taskId != null &&
+            w.archived &&
+            w.workspaceKey == workspace.workspaceKey)
+        .toList()
+      ..sort((a, b) =>
+          (b.updatedAt ?? b.createdAt ?? 0)
+              .compareTo(a.updatedAt ?? a.createdAt ?? 0));
   }
 
   bool get sessionsIndexConnected => _bridge?.activeWorkspace != null;
+
+  // ---------- Task ops ----------
+
+  /// Pins/unpins a task (`zcode-task.setTaskPinned`), then refreshes the list.
+  Future<void> setTaskPinned(String taskId, {required bool pinned}) async {
+    final service = _bridge?.taskService;
+    if (service == null) throw StateError('未连接');
+    await service.setTaskPinned(taskId, pinned: pinned);
+    await refreshSessions();
+  }
+
+  /// Unarchives a task so it shows up in the session list again.
+  Future<void> unarchiveSession(String taskId) async {
+    final service = _bridge?.taskService;
+    if (service == null) throw StateError('未连接');
+    await service.unarchiveTask(taskId);
+    await refreshSessions();
+  }
+
+  /// Marks a task read (`setTaskUnread(false)`) — called when its session is
+  /// opened. Best-effort: failures only log.
+  Future<void> markTaskRead(String taskId) async {
+    final service = _bridge?.taskService;
+    if (service == null) return;
+    try {
+      await service.setTaskUnread(taskId, unread: false);
+    } catch (e) {
+      debugPrint('[zremote] markTaskRead failed: $e');
+    }
+  }
 
   // ---------- Conversation ----------
 
@@ -198,6 +262,8 @@ class AppController extends ChangeNotifier {
     });
     try {
       await controller.start();
+      // Opening the session clears its unread badge (best-effort).
+      unawaited(markTaskRead(sessionId));
     } catch (e) {
       lastError = '会话打开失败: $e';
       notifyListeners();
@@ -238,14 +304,86 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  Future<Map<String, Object?>> sendText(String text, {String? sessionId}) =>
-      _sendCommand('sendText', {'text': text}, sessionId: sessionId);
+  Future<Map<String, Object?>> sendText(String text,
+          {String? sessionId, List<Map<String, Object?>>? attachments}) =>
+      _sendCommand('sendText', {
+        'text': text,
+        if (attachments != null && attachments.isNotEmpty)
+          'attachments': attachments,
+      }, sessionId: sessionId);
 
   Future<Map<String, Object?>> sendGoalCommand(String text) =>
       _sendCommand('sendGoalCommand', {'text': text});
 
   Future<void> stop() async {
     await _sendCommand('stop', const {});
+  }
+
+  /// Compacts the open conversation (summarizes the history so far).
+  Future<Map<String, Object?>> compact() =>
+      _sendCommand('compact', const {});
+
+  /// Re-runs one assistant turn (`retryTurn`; target is `{rowId, entityId}`).
+  Future<Map<String, Object?>> retryTurn(Map<String, Object?> target) =>
+      _sendCommand('retryTurn', {'target': target});
+
+  /// Edits and resends a user message (`editUserQuery`).
+  Future<Map<String, Object?>> editUserQuery(
+    Map<String, Object?> target,
+    String newText,
+  ) =>
+      _sendCommand('editUserQuery', {'target': target, 'newText': newText});
+
+  /// Collaboration mode (build / edit / plan / yolo).
+  Future<Map<String, Object?>> switchCollaborationMode(String mode) =>
+      _sendCommand('switchCollaborationMode', {'mode': mode});
+
+  /// Followup mode (queue / guide).
+  Future<Map<String, Object?>> setFollowupMode(String mode) =>
+      _sendCommand('setFollowupMode', {'mode': mode});
+
+  /// Pauses the session's goal (goal mode; errors if none is running).
+  Future<Map<String, Object?>> pauseGoal() =>
+      _sendCommand('pauseGoal', const {});
+
+  /// Resumes the session's paused goal.
+  Future<Map<String, Object?>> resumeGoal() =>
+      _sendCommand('resumeGoal', const {});
+
+  /// Uploads an attachment (begin/chunk/commit) and returns its descriptor
+  /// `{ref, fileName, mime, bytes}` for sendText / createSession.
+  Future<Map<String, Object?>> uploadAttachment(
+    String sessionId, {
+    required String fileName,
+    required String mime,
+    required Uint8List bytes,
+    void Function(double progress)? onProgress,
+  }) async {
+    final topic = _bridge?.topicSession;
+    if (topic == null) throw StateError('未连接');
+    return topic.attachmentPut(
+      sessionId: sessionId,
+      fileName: fileName,
+      mime: mime,
+      bytes: bytes,
+      onProgress: onProgress,
+    );
+  }
+
+  /// Fetches an attachment's bytes back (`attachmentReadV4`) for in-chat
+  /// previews; null when the read fails.
+  Future<Uint8List?> readAttachment(String ref) async {
+    final sessionId = _conversation?.state?.sessionId;
+    final topic = _bridge?.topicSession;
+    if (sessionId == null || topic == null) return null;
+    try {
+      final result = await topic.attachmentRead(sessionId, ref: ref);
+      final bytes = result.bytes;
+      return bytes.isEmpty ? null : bytes;
+    } catch (e) {
+      zlog('[zremote] attachmentRead failed: $e');
+      return null;
+    }
   }
 
   /// Resolves a pending request from readSession (approval or AskUserQuestion).
@@ -319,6 +457,9 @@ class AppController extends ChangeNotifier {
     if (service == null) throw StateError('未连接');
     final result = await service.readWorkspaceState();
     final settings = result['settings'];
+    zlog('[zremote] readWorkspaceState settings keys: '
+        '${settings is Map ? settings.keys.toList() : null} '
+        'mode=${settings is Map ? settings['mode'] : null}');
     final config = SessionModelConfig.fromSettings(
       settings is Map<String, Object?> ? settings : null,
     );
@@ -329,6 +470,62 @@ class AppController extends ChangeNotifier {
   }
 
   SessionModelConfig? _workspaceModelConfigCache;
+
+  // ---------- Workspace prep (slash commands) & skills ----------
+
+  WorkspacePrep? _workspacePrep;
+  List<SkillEntry>? _skills;
+
+  /// `prepareWorkspace`: config options + slash commands (cached for the
+  /// bridge lifetime). Null when no bridge or the call failed.
+  Future<WorkspacePrep?> fetchWorkspacePrep({bool refresh = false}) async {
+    final cached = _workspacePrep;
+    if (cached != null && !refresh) return cached;
+    final bridge = _bridge;
+    final service = bridge?.taskService;
+    if (bridge == null || service == null) return null;
+    try {
+      final prep = WorkspacePrep.fromJson(await service.prepareWorkspace());
+      _workspacePrep = prep;
+      final opts = [
+        for (final o in prep.configOptions)
+          '${o.id}=${o.currentValue}'
+              '(${o.options.length} opts)',
+      ].join('; ');
+      zlog('[zremote] prepareWorkspace: ${prep.configOptions.length} '
+          'config options [$opts], '
+          '${prep.slashCommands.length} slash commands');
+      return prep;
+    } catch (e) {
+      zlog('[zremote] prepareWorkspace failed: $e');
+      return null;
+    }
+  }
+
+  /// Enabled skills (`skills.list`, cached for the bridge lifetime).
+  Future<List<SkillEntry>> fetchSkills({bool refresh = false}) async {
+    final cached = _skills;
+    if (cached != null && !refresh) return cached;
+    final bridge = _bridge;
+    final rpc = bridge?.channel('skills');
+    final target = bridge?.workspaceTarget;
+    if (bridge == null || rpc == null || target == null) return const [];
+    try {
+      final skills = await SkillsService(rpc, target).list();
+      _skills = skills;
+      zlog('[zremote] skills.list: ${skills.length} skills');
+      return skills;
+    } catch (e) {
+      zlog('[zremote] skills.list failed: $e');
+      return const [];
+    }
+  }
+
+  /// The model-provider CRUD service (null while not connected).
+  ModelProviderService? get modelProviderService {
+    final rpc = _bridge?.channel('model-provider');
+    return rpc == null ? null : ModelProviderService(rpc);
+  }
 
   /// The current selection of one open session (readSession settings), to be
   /// shown as the highlighted values inside the workspace-wide picker.
@@ -363,6 +560,8 @@ class AppController extends ChangeNotifier {
     String? provider,
     String? model,
     String? thoughtLevel,
+    String? mode,
+    String? followupMode,
   }) async {
     final workspace = _bridge?.activeWorkspace;
     if (workspace == null) return;
@@ -370,14 +569,20 @@ class AppController extends ChangeNotifier {
       'workspaceId': workspace.workspaceKey,
       'firstInput': {'text': firstInput},
       // The desktop accepts the session's initial model/thought level as
-      // `config: {provider, model, thought}` (probe-verified schema). Each
-      // field is optional, so a partial config (e.g. thought level only) is
-      // fine.
-      if (provider != null || model != null || thoughtLevel != null)
+      // `config: {provider, model, thought}` (probe-verified schema), plus
+      // collaboration/followup mode. Each field is optional, so a partial
+      // config (e.g. thought level only) is fine.
+      if (provider != null ||
+          model != null ||
+          thoughtLevel != null ||
+          mode != null ||
+          followupMode != null)
         'config': {
           if (provider != null) 'provider': provider,
           if (model != null) 'model': model,
           if (thoughtLevel != null) 'thought': thoughtLevel,
+          if (mode != null) 'mode': mode,
+          if (followupMode != null) 'followupMode': followupMode,
         },
     });
     // The RPC returning OK only means the host accepted the frame — the
