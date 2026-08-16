@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
 import '../bridge/bridge_manager.dart';
-import '../session/models.dart';
+import '../protocol/topics/topic_models.dart';
 import 'project_avatar.dart';
 import 'sessions_page.dart';
 

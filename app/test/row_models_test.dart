@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zcode_remote/src/session/models.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 
 /// Guards the row parsing/rendering contract against the live desktop data
 /// shapes captured 2026-08-16 (see /tmp/rows_dump.mjs output in the handoff).

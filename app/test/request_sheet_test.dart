@@ -1,0 +1,264 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
+import 'package:zcode_remote/src/ui/request_sheet.dart';
+
+PendingRequest permission({
+  String requestId = 'perm_1',
+  String toolName = 'Bash',
+  String reason = '允许执行 bash 命令？',
+  String riskLevel = 'medium',
+  List<PendingRequestOption> options = const [
+    PendingRequestOption(optionId: 'allow_once', kind: 'allow_once', name: '允许一次'),
+    PendingRequestOption(optionId: 'allow_always', kind: 'allow_always', name: '始终允许'),
+    PendingRequestOption(optionId: 'deny', kind: 'deny', name: '拒绝'),
+  ],
+}) =>
+    PendingRequest(
+      requestId: requestId,
+      toolCallId: 'call_1',
+      toolName: toolName,
+      reason: reason,
+      riskLevel: riskLevel,
+      options: options,
+      requestedAt: 1,
+    );
+
+PendingRequest question({
+  String requestId = 'perm_2',
+  List<Map<String, Object?>>? questions,
+}) =>
+    PendingRequest(
+      requestId: requestId,
+      toolName: 'AskUserQuestion',
+      reason: '需要你的回答',
+      input: {
+        'questions': questions ??
+            [
+              {
+                'question': '选一个颜色',
+                'options': [
+                  {'value': 'Red', 'label': '红色'},
+                  {'value': 'Blue', 'label': '蓝色'},
+                ],
+                'multiSelect': false,
+              },
+            ],
+      },
+      requestedAt: 2,
+    );
+
+PendingRequest freeText({String requestId = 'perm_3'}) => PendingRequest(
+      requestId: requestId,
+      toolName: 'AskUserQuestion',
+      reason: '请输入内容',
+      input: {'freeText': true, 'prompt': '描述一下你的想法'},
+      requestedAt: 3,
+    );
+
+void main() {
+  group('PendingRequest classification', () {
+    test('permission requests are not elicitations', () {
+      final p = permission();
+      expect(p.hasQuestions, isFalse);
+      expect(p.isFreeTextInput, isFalse);
+      expect(p.isExitPlanMode, isFalse);
+      expect(p.isElicitation, isFalse);
+      expect(p.prompt, '允许执行 bash 命令？');
+    });
+
+    test('AskUserQuestion with questions is an elicitation', () {
+      final q = question();
+      expect(q.hasQuestions, isTrue);
+      expect(q.isElicitation, isTrue);
+      expect(q.questions.single.question, '选一个颜色');
+    });
+
+    test('freeText input is an elicitation but not a permission', () {
+      final f = freeText();
+      expect(f.isFreeTextInput, isTrue);
+      expect(f.isElicitation, isTrue);
+      expect(f.questions, isEmpty);
+    });
+
+    test('ExitPlanMode is an elicitation', () {
+      final e = PendingRequest(
+        requestId: 'perm_4',
+        toolName: 'ExitPlanMode',
+        reason: '计划审批',
+        input: {'interaction': 'plan_approval', 'plan': '重构模块 A'},
+      );
+      expect(e.isExitPlanMode, isTrue);
+      expect(e.isElicitation, isTrue);
+      expect(e.isFreeTextInput, isFalse);
+    });
+
+    test('permission with a prompt-like arg is still a permission', () {
+      // A tool whose args happen to contain a "prompt" key must not be
+      // misclassified — only freeText: true marks a real free-text input.
+      final p = PendingRequest(
+        requestId: 'perm_5',
+        toolName: 'SomeTool',
+        reason: '批准',
+        input: {'prompt': 'some tool arg'},
+        options: const [PendingRequestOption(optionId: 'allow', kind: 'allow_once')],
+      );
+      expect(p.isFreeTextInput, isFalse);
+      expect(p.isElicitation, isFalse);
+    });
+
+    test('option kind labels', () {
+      expect(PendingRequest.optionKindLabel('allow_once'), '允许一次');
+      expect(PendingRequest.optionKindLabel('allowOnce'), '允许一次');
+      expect(PendingRequest.optionKindLabel('allow_always'), '始终允许');
+      expect(PendingRequest.optionKindLabel('deny'), '拒绝');
+      expect(PendingRequest.optionKindLabel('custom'), '自定义');
+      expect(PendingRequest.optionKindLabel('unknown'), '');
+    });
+  });
+
+  group('RequestSheet', () {
+    Future<List<Map<String, Object?>>> pumpSheet(
+      WidgetTester tester,
+      List<PendingRequest> requests,
+    ) async {
+      final answers = <Map<String, Object?>>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: RequestSheet(
+            requests: requests,
+            onResolve: (request, answer) async {
+              answers.add(answer);
+            },
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      return answers;
+    }
+
+    testWidgets('permission page renders options and resolves with optionId',
+        (tester) async {
+      final answers = await pumpSheet(tester, [permission()]);
+
+      expect(find.text('需要批准'), findsOneWidget);
+      expect(find.text('允许执行 bash 命令？'), findsOneWidget);
+      expect(find.text('Bash'), findsOneWidget);
+      expect(find.text('允许一次'), findsOneWidget);
+      expect(find.text('始终允许'), findsOneWidget);
+      expect(find.text('拒绝'), findsOneWidget);
+
+      await tester.tap(find.text('允许一次'));
+      await tester.pump();
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      expect(answers, [
+        {'optionId': 'allow_once'},
+      ]);
+    });
+
+    testWidgets('cancel on a permission picks the deny option', (tester) async {
+      final answers = await pumpSheet(tester, [permission()]);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(answers, [
+        {'optionId': 'deny'},
+      ]);
+    });
+
+    testWidgets('cancel on a permission without deny just closes',
+        (tester) async {
+      final answers = await pumpSheet(tester, [
+        permission(
+          options: const [
+            PendingRequestOption(optionId: 'allow_once', kind: 'allow_once', name: '允许一次'),
+          ],
+        ),
+      ]);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(answers, isEmpty);
+    });
+
+    testWidgets('question page resolves with action accept and content',
+        (tester) async {
+      final answers = await pumpSheet(tester, [question()]);
+
+      expect(find.text('需要你的回答'), findsOneWidget);
+      expect(find.text('选一个颜色'), findsOneWidget);
+
+      await tester.tap(find.text('红色'));
+      await tester.pump();
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      expect(answers, hasLength(1));
+      final answer = answers.single;
+      expect(answer['action'], 'accept');
+      final content = answer['content'] as Map<String, Object?>;
+      expect(content['answers'], {'选一个颜色': 'Red'});
+      expect(content['answer_0'], 'Red');
+      expect(content['answer'], 'Red');
+    });
+
+    testWidgets('cancel on a question sends action cancel', (tester) async {
+      final answers = await pumpSheet(tester, [question()]);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(answers, [
+        {'action': 'cancel'},
+      ]);
+    });
+
+    testWidgets('freeText page resolves with freeText', (tester) async {
+      final answers = await pumpSheet(tester, [freeText()]);
+
+      expect(find.text('描述一下你的想法'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '我的回答');
+      await tester.pump();
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      expect(answers, [
+        {'freeText': '我的回答'},
+      ]);
+    });
+
+    testWidgets('freeText cancel sends action cancel', (tester) async {
+      final answers = await pumpSheet(tester, [freeText()]);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(answers, [
+        {'action': 'cancel'},
+      ]);
+    });
+
+    testWidgets('mixed permission + question list pages and resolves each',
+        (tester) async {
+      final answers = await pumpSheet(
+          tester, [permission(requestId: 'perm_a'), question(requestId: 'perm_b')]);
+
+      // First page: the permission.
+      expect(find.text('需要批准'), findsNothing); // mixed title
+      expect(find.text('需要处理'), findsOneWidget);
+      expect(find.text('允许执行 bash 命令？'), findsOneWidget);
+
+      // Answer it and advance to the question page.
+      await tester.tap(find.text('始终允许'));
+      await tester.pump();
+      await tester.tap(find.text('下一题'));
+      await tester.pumpAndSettle();
+      expect(find.text('选一个颜色'), findsOneWidget);
+
+      await tester.tap(find.text('蓝色'));
+      await tester.pump();
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      expect(answers, hasLength(2));
+      expect(answers[0], {'optionId': 'allow_always'});
+      expect(answers[1]['action'], 'accept');
+    });
+  });
+}

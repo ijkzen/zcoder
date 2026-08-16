@@ -1,10 +1,13 @@
-/// The binary RPC layer that runs over the acknowledged relay protocol.
+/// Layer 4 — the binary RPC channel that runs over the acknowledged rpc-frame
+/// transport: named channels, promise calls (type 100/201/202/203) and event
+/// subscriptions (102/103/204). See docs/protocol/04-binary-rpc-channel.md.
 ///
-/// Frames are `[type:u8][id:u32BE][ack:u32BE][len:u32BE]` + body; the body is
-/// two typed-serialized values: the `[msgType, requestId, channel, method]`
-/// array and the `args` value. Typed serialization uses 1-byte tags and
-/// LEB128 varints (mirroring `xc`/`Sc` in the desktop protocol code).
+/// Bodies are two typed-serialized values: the `[msgType, requestId, channel,
+/// method]` array and the `args` value. Serialization uses 1-byte tags and
+/// LEB128 varints; int32 negatives travel as unsigned varints and are
+/// sign-extended on decode (matching the desktop's JS int32 coercion).
 library;
+
 
 import 'dart:async';
 import 'dart:convert';
@@ -14,7 +17,8 @@ import 'package:flutter/foundation.dart';
 
 import '../core/buffer_io.dart';
 
-// Request/response message types (client side).
+/// Request/response message types (protocol-level, not the 13-byte socket
+/// header used device-internally).
 class MsgType {
   static const promise = 100;
   static const promiseCancel = 101;
@@ -40,6 +44,8 @@ class _Tag {
 
 const String _nestedUint8Key = '__zcode_rpc_nested_uint8array_v1';
 const String _base64Key = 'base64';
+const int _int32SignBit = 1 << 31;
+const int _int32Range = 1 << 32;
 
 class RpcError implements Exception {
   final String name;
@@ -51,10 +57,10 @@ class RpcError implements Exception {
   String toString() => 'RpcError($name): $message';
 }
 
-class BinaryRpcChannel {
+class RpcChannel {
   final String name;
-  final BinaryRpcClient client;
-  BinaryRpcChannel(this.name, this.client);
+  final ChannelClient client;
+  RpcChannel(this.name, this.client);
 
   Future<Object?> call(String method, [Object? args]) =>
       client.requestPromise(name, method, args);
@@ -63,10 +69,10 @@ class BinaryRpcChannel {
       client.requestEvent(name, method, args);
 }
 
-class BinaryRpcClient {
+class ChannelClient {
   final Stream<Uint8List> messageStream;
   final void Function(Uint8List frame) frameSender;
-  BinaryRpcClient(this.messageStream, this.frameSender);
+  ChannelClient(this.messageStream, this.frameSender);
 
   final _pending = <int, Completer<Object?>>{};
   final _events = <int, _EventSubscription>{};
@@ -79,9 +85,7 @@ class BinaryRpcClient {
 
   Stream<void> get onInitialize => _onInitialize.stream;
 
-  /// Completes once the desktop's Initialize frame has been processed.
-  /// Unlike `onInitialize.first`, this is safe to await after the frame has
-  /// already arrived (broadcast streams do not replay).
+  /// Completes once the device's Initialize frame (type 200) has arrived.
   Future<void> get whenInitialized async {
     if (_initialized) return;
     await _onInitialize.stream.first;
@@ -93,7 +97,7 @@ class BinaryRpcClient {
 
   late final StreamSubscription<Uint8List> _subscription;
 
-  BinaryRpcChannel channel(String name) => BinaryRpcChannel(name, this);
+  RpcChannel channel(String name) => RpcChannel(name, this);
 
   Future<Object?> requestPromise(String channel, String method, [Object? args]) {
     final id = ++_lastRequestId;
@@ -122,13 +126,13 @@ class BinaryRpcClient {
 
   void _sendRequest(int type, int id, String channel, String method, Object? args) {
     if (!_initialized) {
-      // The desktop sends Initialize first; we must not send before that.
+      // The device sends Initialize first; we must not send before that.
       throw StateError('binary rpc not initialized');
     }
     final writer = ByteWriter();
     _serializeValue(writer, [type, id, channel, method]);
     _serializeValue(writer, args);
-    _sendFrame(writer.toBytes());
+    frameSender(writer.toBytes());
   }
 
   void _sendCancelOrDispose(int type, int id) {
@@ -136,30 +140,20 @@ class BinaryRpcClient {
     final writer = ByteWriter();
     _serializeValue(writer, [type, id]);
     _serializeValue(writer, null); // undefined
-    _sendFrame(writer.toBytes());
-  }
-
-  void _sendFrame(Uint8List body) {
-    // Same as receive: no 13-byte socket header over the relay.
-    frameSender(body);
+    frameSender(writer.toBytes());
   }
 
   void _onMessage(Uint8List data) {
     // Over the relay each rpc-frame carries the raw body — the two
     // typed-serialized values — with no 13-byte socket header (that header
-    // belongs to the local SocketProtocol layer and is stripped by the
-    // bridge).
-    _handleBody(data);
-  }
-
-  void _handleBody(Uint8List body) {
-    if (body.length == 0) return;
-    final reader = ByteReader(body);
+    // belongs to the device-internal SocketProtocol layer and is not used on
+    // the relay path).
+    if (data.isEmpty) return;
+    final reader = ByteReader(data);
     final header = _deserializeValue(reader);
     if (header is! List || header.isEmpty) return;
     final type = header[0];
     if (type is! int) return;
-    debugPrint('[zremote] rpc message type=$type header=$header');
     final args = reader.remaining > 0 ? _deserializeValue(reader) : null;
 
     switch (type) {
@@ -177,11 +171,10 @@ class BinaryRpcClient {
         if (id is int) {
           final c = _pending.remove(id);
           if (c != null) {
-            final data = args is Map<String, Object?> ? args : <String, Object?>{};
-            final extra = Map<String, Object?>.from(data);
+            final data2 = args is Map<String, Object?> ? args : <String, Object?>{};
+            final extra = Map<String, Object?>.from(data2);
             final name = extra.remove('name')?.toString() ?? 'Error';
             final message = extra.remove('message')?.toString() ?? '';
-            debugPrint('[zremote] rpc error id=$id name=$name message=$message');
             final stack = extra.remove('stack');
             c.completeError(RpcError(
               name,
@@ -205,7 +198,7 @@ class BinaryRpcClient {
     }
   }
 
-  // ---- Typed value serialization (mirrors xc/Sc) ----
+  // ---- Typed value serialization ----
 
   void _serializeValue(ByteWriter w, Object? value) {
     if (value == null) {
@@ -276,7 +269,11 @@ class BinaryRpcClient {
         final raw = utf8.decode(r.read(n));
         return _jsonReviver(jsonDecode(raw));
       case _Tag.int:
-        return r.readVarint();
+        var v = r.readVarint();
+        // JS readers sign-extend through int32 coercion; mirror that for
+        // values whose bit 31 is set.
+        if (v >= _int32SignBit && v < _int32Range) v -= _int32Range;
+        return v;
       default:
         throw FormatException('unknown type tag $tag');
     }

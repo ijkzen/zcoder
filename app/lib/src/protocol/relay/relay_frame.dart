@@ -1,5 +1,7 @@
-/// Credential and message types for the relay WebSocket protocol
-/// (`wss://zcode.z.ai/ws`).
+/// Layer 1 — relay WebSocket message types (`wss://zcode.z.ai/ws`).
+///
+/// Every relay frame is JSON text with a `type` field. See
+/// docs/protocol/01-relay-transport.md.
 library;
 
 import 'dart:convert';
@@ -45,7 +47,7 @@ class PairingCredential {
   String get displayName => deviceName ?? deviceSid;
 }
 
-/// Relay message envelope: every relay frame is JSON with a `type` field.
+/// Relay message envelope.
 sealed class RelayMessage {
   const RelayMessage();
   Map<String, Object?> toJson();
@@ -89,6 +91,7 @@ class AuthResponse extends RelayMessage {
     required this.proof,
     required this.clientTs,
   });
+
   @override
   Map<String, Object?> toJson() => {
         'type': 'auth_response',
@@ -185,7 +188,7 @@ RelayMessage? parseRelayMessage(String raw) {
   }
 }
 
-/// Well-known relay error codes.
+/// Well-known relay error codes (`error.code`).
 class RelayErrorCode {
   static const kicked = 'KICKED';
   static const authFailed = 'AUTH_FAILED';

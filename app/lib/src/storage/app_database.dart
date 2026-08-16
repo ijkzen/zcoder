@@ -7,7 +7,7 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
-import '../relay/relay_types.dart';
+import '../protocol/relay/relay_frame.dart';
 
 class StoredPairing {
   final int id;

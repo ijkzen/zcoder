@@ -1,18 +1,16 @@
-/// Orchestrates the connection lifecycle: relay pairing → workspace bridge →
-/// binary RPC → session channel. This is the single object the UI talks to.
+/// Orchestrates the connection lifecycle over the protocol module: relay
+/// pairing → app payloads (workspace list, bridge open) → acknowledged
+/// transport → binary RPC → topic session. This is the single object the UI
+/// talks to; everything wire-format lives in `lib/src/protocol/`.
 library;
 
+import '../protocol/zlog.dart';
+
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 
-import 'acknowledged_protocol.dart';
-import 'binary_rpc.dart';
-import '../core/random_ids.dart' as ids;
-import '../relay/relay_client.dart';
-import '../session/session_channel.dart';
-import '../session/models.dart';
+import '../protocol/protocol.dart';
+import '../protocol/core/random_ids.dart' as ids;
 
 enum BridgePhase {
   idle,
@@ -56,16 +54,46 @@ class BridgeManager {
   Workspace? _activeWorkspace;
   Workspace? get activeWorkspace => _activeWorkspace;
 
-  AcknowledgedRelayProtocol? _protocol;
-  SessionChannel? _sessionChannel;
+  RpcFrameTransport? _transport;
+  ChannelClient? _rpc;
+  TopicSession? _topicSession;
 
-  final _pendingBridgeOpen = <String, Completer<void>>{};
+  /// Task/session service RPCs for the active workspace.
+  ZcodeTaskService? get taskService {
+    final workspace = _activeWorkspace;
+    final rpc = _rpc;
+    if (workspace == null || rpc == null) return null;
+    return ZcodeTaskService(
+      rpc.channel('zcode-task'),
+      WorkspaceTarget(
+        workspacePath: workspace.workspaceKey,
+        workspaceIdentity: workspace.workspaceIdentity,
+      ),
+    );
+  }
+
+  ZcodeSessionService? get sessionService {
+    final workspace = _activeWorkspace;
+    final rpc = _rpc;
+    if (workspace == null || rpc == null) return null;
+    return ZcodeSessionService(
+      rpc.channel('zcode-session'),
+      WorkspaceTarget(
+        workspacePath: workspace.workspaceKey,
+        workspaceIdentity: workspace.workspaceIdentity,
+      ),
+    );
+  }
+
+  final _pendingWorkspaceList = <String, Completer<List<Workspace>>>{};
+  final _pendingBridgeOpen = <String, Completer<BridgeIdentity>>{};
   int _requestCounter = 0;
 
   bool _disposed = false;
 
   StreamSubscription? _relayStateSub;
   StreamSubscription? _relayPayloadSub;
+  StreamSubscription? _degradedSub;
 
   /// Starts the manager: connects the relay and processes its stream.
   Future<void> start() async {
@@ -81,7 +109,10 @@ class BridgeManager {
       case RelayState.reconnecting:
         _setPhase(BridgePhase.connecting);
       case RelayState.paired:
-        _setPhase(BridgePhase.pairing);
+        // The device keeps its bridge across our reconnects and replays its
+        // unacked frames; we mirror that for our own outbound side.
+        _transport?.replayUnacked();
+        _setPhase(_topicSession == null ? BridgePhase.pairing : BridgePhase.ready);
         _requestWorkspaceList();
       case RelayState.closed:
         _setPhase(BridgePhase.failed);
@@ -93,20 +124,65 @@ class BridgeManager {
     if (!_disposed) _phaseController.add(p);
   }
 
-  // ---------- Application payloads over the relay ----------
+  // ---------- Layer 2: app payloads ----------
 
   Future<List<Workspace>> _requestWorkspaceList() async {
     final requestId = _nextRequestId('workspace-list');
-    debugPrint('[zremote] sending workspace-list-request');
+    zlog('[zremote] sending workspace-list-request');
     final completer = Completer<List<Workspace>>();
-    _pendingWorkspaceList = completer;
-    relay.sendPayload({'zcode_type': 'workspace-list-request', 'requestId': requestId});
+    _pendingWorkspaceList[requestId] = completer;
+    relay.sendPayload(workspaceListRequest(requestId));
     return completer.future;
   }
 
-  Completer<List<Workspace>>? _pendingWorkspaceList;
+  /// Parses workspace-list data into the Workspace list the UI renders,
+  /// using the payload type's canonical merge (tasks first, workspaces fill
+  /// gaps, dedup by workspace key).
+  List<Workspace> _parseWorkspaces(WorkspaceListData data) =>
+      data.mergedEntries.map(Workspace.fromJson).toList();
 
-  /// Opens a bridge to [workspace] and initializes the session channel.
+  void _applyWorkspaceList(WorkspaceListData data) {
+    _workspaces = _parseWorkspaces(data);
+    if (!_disposed) _workspacesController.add(_workspaces);
+  }
+
+  void _onRelayPayload(Map<String, Object?> raw) {
+    final payload = parseAppPayload(raw);
+    if (payload == null) {
+      zlog('[zremote] unknown app payload: ${raw['zcode_type']}');
+      return;
+    }
+    switch (payload) {
+      case WorkspaceListResponse(:final requestId, :final data):
+        _applyWorkspaceList(data);
+        _pendingWorkspaceList.remove(requestId)?.complete(_workspaces);
+      case WorkspaceListUpdated(:final data):
+        _applyWorkspaceList(data);
+      case WorkspaceBridgeReady(:final requestId, :final identity):
+        _pendingBridgeOpen.remove(requestId)?.complete(identity);
+      case WorkspaceBridgeError(:final requestId, :final reason, :final error):
+        final exception = BridgeException(reason, error);
+        if (requestId != null) {
+          _pendingBridgeOpen.remove(requestId)?.completeError(exception);
+        }
+        _emitError(exception);
+      case AppError(:final requestId, :final reason, :final error):
+        final exception = BridgeException(reason, error);
+        if (requestId != null) {
+          _pendingBridgeOpen.remove(requestId)?.completeError(exception);
+        }
+        _emitError(exception);
+      case BridgeDegraded(:final reason):
+        _emitError(BridgeException('bridge-degraded', reason));
+      case RpcTransportPayload():
+        _transport?.acceptPayload(payload.frame);
+      case WorkspaceReconnectResponse():
+      case PlatformResponse():
+        break;
+    }
+  }
+
+  /// Opens a bridge to [workspace] and initializes the topic session.
   Future<void> selectWorkspace(Workspace workspace) async {
     if (_phase != BridgePhase.pairing && _phase != BridgePhase.ready) {
       throw BridgeException('invalid-state', 'relay not ready (phase=$_phase)');
@@ -114,53 +190,59 @@ class BridgeManager {
     _teardownBridge();
     _setPhase(BridgePhase.connecting);
 
-    final bridgeSessionId = _newBridgeSessionId();
+    final identity = BridgeIdentity(
+      bridgeSessionId: ids.newBridgeSessionId(),
+      bridgeGeneration: 1,
+    );
     final requestId = _nextRequestId('bridge-open');
-    final completer = Completer<void>();
+    final completer = Completer<BridgeIdentity>();
     _pendingBridgeOpen[requestId] = completer;
 
-    debugPrint('[zremote] sending workspace-bridge-open key=${workspace.workspaceKey} task=${workspace.taskId}');
-    relay.sendPayload({
-      'zcode_type': 'workspace-bridge-open',
-      'requestId': requestId,
-      'bridgeSessionId': bridgeSessionId,
-      'bridgeGeneration': 1,
-      'workspaceKey': workspace.workspaceKey,
-    });
+    zlog('[zremote] sending workspace-bridge-open '
+        'key=${workspace.workspaceKey} task=${workspace.taskId}');
+    relay.sendPayload(workspaceBridgeOpen(
+      requestId: requestId,
+      identity: identity,
+      workspaceKey: workspace.workspaceKey,
+      taskId: workspace.taskId,
+    ));
 
-    await completer.future.timeout(const Duration(seconds: 30), onTimeout: () {
-      throw BridgeException('desktop-bootstrap-timeout', 'bridge open timed out');
-    });
-
-    final protocol = AcknowledgedRelayProtocol(
-      relay: relay,
-      bridgeSessionId: bridgeSessionId,
+    final readyIdentity = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw BridgeException(
+          'desktop-bootstrap-timeout', 'bridge open timed out'),
     );
-    _protocol = protocol;
 
-    final rpc = BinaryRpcClient(protocol.messageStream, protocol.sendMessage);
+    final transport = RpcFrameTransport(sendPayload: relay.sendPayload, identity: readyIdentity);
+    _degradedSub = transport.degradedStream.listen((reason) {
+      _emitError(BridgeException('bridge-degraded', reason));
+    });
+    _transport = transport;
+
+    final rpc = ChannelClient(transport.messageStream, transport.sendMessage);
+    final channel = TopicSession(
+      rpc.channel(agentChannelName),
+      clientId: clientId,
+      workspaceKey: workspace.workspaceKey,
+    );
     final bridgeReady = Completer<void>();
-    rpc.whenInitialized.then((_) async {
-      debugPrint('[zremote] rpc initialized');
+    unawaited(rpc.whenInitialized.then((_) async {
+      zlog('[zremote] rpc initialized');
       try {
-        final channel = SessionChannel(
-          rpc.channel(sessionChannelName),
-          clientId: clientId,
-          workspaceKey: workspace.workspaceKey,
-        );
-        _sessionChannel = channel;
         await channel.initialize();
+        _rpc = rpc;
+        _topicSession = channel;
         _activeWorkspace = workspace;
         if (!_disposed) _activeWorkspaceController.add(workspace);
         _setPhase(BridgePhase.ready);
         _sendViewState();
         if (!bridgeReady.isCompleted) bridgeReady.complete();
       } catch (e) {
-        debugPrint('[zremote] channel initialize failed: $e');
+        zlog('[zremote] channel initialize failed: $e');
         if (!bridgeReady.isCompleted) bridgeReady.completeError(e);
         _emitError(BridgeException('initialize-failed', e.toString()));
       }
-    });
+    }));
 
     rpc.start();
 
@@ -171,105 +253,36 @@ class BridgeManager {
     });
   }
 
-  void _onRelayPayload(Map<String, Object?> payload) {
-    final type = payload['zcode_type'];
-    debugPrint('[zremote] app payload: $type');
-    switch (type) {
-      case 'workspace-list-response':
-        debugPrint('[zremote] workspace-list-response payload=${jsonEncode(payload)}');
-        final result = payload['result'];
-        if (result is Map<String, Object?>) {
-          // The desktop returns a `tasks` array (each task naming its
-          // workspace); some shapes may carry a `workspaces` array instead.
-          final raw = (result['tasks'] is List)
-              ? result['tasks'] as List
-              : (result['workspaces'] is List ? result['workspaces'] as List : null);
-          if (raw != null) {
-            _workspaces = raw
-                .whereType<Map<String, Object?>>()
-                .map(Workspace.fromJson)
-                .toList();
-            if (!_disposed) _workspacesController.add(_workspaces);
-            _pendingWorkspaceList?.complete(_workspaces);
-            _pendingWorkspaceList = null;
-          }
-        }
-      case 'workspace-bridge-ready':
-        final requestId = payload['requestId'];
-        if (requestId is String) {
-          _pendingBridgeOpen.remove(requestId)?.complete();
-        }
-      case 'workspace-bridge-error':
-      case 'app-error':
-        final requestId = payload['requestId'];
-        final reason = payload['reason']?.toString() ?? 'unknown';
-        final error = payload['error']?.toString() ?? '';
-        if (requestId is String) {
-          _pendingBridgeOpen.remove(requestId)?.completeError(
-                BridgeException(reason, error),
-              );
-        }
-        _emitError(BridgeException(reason, error));
-      case 'workspace-list-updated':
-        final result = payload['result'];
-        if (result is Map<String, Object?>) {
-          final raw = (result['tasks'] is List)
-              ? result['tasks'] as List
-              : (result['workspaces'] is List ? result['workspaces'] as List : null);
-          if (raw != null) {
-            _workspaces = raw
-                .whereType<Map<String, Object?>>()
-                .map(Workspace.fromJson)
-                .toList();
-            if (!_disposed) _workspacesController.add(_workspaces);
-          }
-        }
-      case 'rpc-frame':
-        debugPrint('[zremote] rpc-frame received (protocol=${_protocol != null})');
-        _protocol?.acceptFrame(payload);
-      case 'rpc-frame-ack':
-        _protocol?.acceptAck(payload);
-      case 'bridge-degraded':
-        // The bridge lost frames; for v1 we surface it and let the user
-        // reconnect the workspace.
-        final reason = payload['reason']?.toString() ?? 'unknown';
-        _emitError(BridgeException('bridge-degraded', reason));
-    }
-  }
-
-  /// Sends a raw application payload over the relay (used by the UI for
-  /// ad-hoc requests like refreshing the workspace list).
+  /// Sends a raw application payload over the relay (ad-hoc requests).
   void sendPayload(Map<String, Object?> payload) {
     relay.sendPayload(payload);
   }
 
-  /// Re-requests the workspace/task list (e.g. after a rename or archive so
-  /// the sessions list reflects the change without waiting for a push).
-  /// Concurrent calls share the in-flight request.
+  /// Re-requests the workspace/task list. Concurrent calls share one
+  /// in-flight request per requestId; this returns the newest pending one.
   Future<List<Workspace>> refreshWorkspaceList() {
-    final pending = _pendingWorkspaceList;
-    if (pending != null) return pending.future;
+    if (_pendingWorkspaceList.isNotEmpty) {
+      return _pendingWorkspaceList.values.last.future;
+    }
     return _requestWorkspaceList();
   }
 
-  void _sendViewState() {    final workspace = _activeWorkspace;
+  void _sendViewState() {
+    final workspace = _activeWorkspace;
     if (workspace == null) return;
-    relay.sendPayload({
-      'zcode_type': 'mobile-view-state-update',
-      'viewState': {
-        'activeWorkspaceKey': workspace.workspaceKey,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      },
-      'deviceInfo': {
-        'platform': 'android',
-        'version': '1.0.0',
-        'name': 'zcode-remote',
-        'timezone': DateTime.now().timeZoneName,
-      },
-    });
+    relay.sendPayload(mobileViewStateUpdate(
+      activeWorkspaceKey: workspace.workspaceKey,
+      activeTaskId: workspace.taskId,
+      deviceInfo: mobileDeviceInfo(
+        platform: 'android',
+        version: '1.0.0',
+        name: 'zcode-remote',
+        language: 'zh-CN',
+      ),
+    ));
   }
 
-  /// Sends a conversation command through the session channel.
+  /// Sends a conversation command through the topic session.
   Future<Map<String, Object?>> sendCommand({
     String? sessionId,
     int? baseRevision,
@@ -277,11 +290,11 @@ class BridgeManager {
     required String type,
     required Map<String, Object?> payload,
   }) {
-    final channel = _sessionChannel;
+    final channel = _topicSession;
     if (channel == null) {
       throw BridgeException('no-bridge', 'session channel not ready');
     }
-    final command = buildCommand(
+    return channel.sendCommand(buildCommand(
       commandId: newCommandId(),
       clientId: clientId,
       sessionId: sessionId,
@@ -289,17 +302,20 @@ class BridgeManager {
       baseLogEpoch: baseLogEpoch,
       type: type,
       payload: payload,
-    );
-    return channel.sendCommand(command);
+    ));
   }
 
-  SessionChannel? get sessionChannel => _sessionChannel;
+  TopicSession? get topicSession => _topicSession;
 
   void _teardownBridge() {
-    _sessionChannel?.dispose();
-    _sessionChannel = null;
-    _protocol?.dispose();
-    _protocol = null;
+    _degradedSub?.cancel();
+    _degradedSub = null;
+    _topicSession?.dispose();
+    _topicSession = null;
+    _rpc?.dispose();
+    _rpc = null;
+    _transport?.dispose();
+    _transport = null;
     _activeWorkspace = null;
   }
 
@@ -310,10 +326,8 @@ class BridgeManager {
   String _nextRequestId(String prefix) {
     _requestCounter++;
     final random = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    return '$prefix-$random-${_requestCounter}';
+    return '$prefix-$random-$_requestCounter';
   }
-
-  String _newBridgeSessionId() => ids.newBridgeSessionId();
 
   Future<void> dispose() async {
     _disposed = true;

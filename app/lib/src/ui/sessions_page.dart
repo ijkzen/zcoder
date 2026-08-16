@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
-import '../session/models.dart';
+import '../protocol/topics/topic_models.dart';
 import 'conversation_page.dart';
 import 'model_config_sheet.dart';
 

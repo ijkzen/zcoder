@@ -84,11 +84,14 @@ class Workspace {
   });
 
   factory Workspace.fromJson(Map<String, Object?> json) {
-    // Workspaces array shape: workspaceKey is explicit.
+    // Canonical workspace key: `workspaceIdentity` when present, else the
+    // path (docs/protocol/02). Entries never carry a workspaceKey field in
+    // the payload; an explicit one wins if a future host sends it.
     final key = json['workspaceKey'] as String?;
     final path = json['workspacePath'] as String? ?? '';
+    final identity = json['workspaceIdentity'] as String?;
     return Workspace(
-      workspaceKey: key ?? path,
+      workspaceKey: key ?? (identity != null && identity.isNotEmpty ? identity : path),
       workspacePath: path,
       workspaceIdentity: json['workspaceIdentity'] as String?,
       workspaceLabel: json['workspaceLabel'] as String? ?? '',
@@ -821,7 +824,41 @@ class PendingRequest {
 
   bool get hasQuestions => questions.isNotEmpty;
 
-  bool get isElicitation => hasQuestions || toolName == 'AskUserQuestion';
+  /// Plan-approval elicitation (ExitPlanMode): `input.interaction ==
+  /// "plan_approval"` with a plan summary in `input.plan`.
+  bool get isExitPlanMode =>
+      toolName == 'ExitPlanMode' || input['interaction'] == 'plan_approval';
+
+  /// Free-text elicitation: the runtime's userInput interaction with
+  /// `freeText: true` and a `prompt` but no `questions`. Permission entries
+  /// (tool args in `input`) never carry `freeText: true`.
+  bool get isFreeTextInput =>
+      !hasQuestions && input['freeText'] == true && input['prompt'] is String;
+
+  /// True for anything the user must answer textually (as opposed to an
+  /// allow/deny permission): AskUserQuestion, ExitPlanMode, free-text input.
+  bool get isElicitation =>
+      hasQuestions || toolName == 'AskUserQuestion' || isExitPlanMode || isFreeTextInput;
+
+  /// Human-readable label for a permission option's `kind`
+  /// (`allow_once`/`allowOnce` | `allow_always`/`allowAlways` | `deny` |
+  /// `custom`).
+  static String optionKindLabel(String kind) {
+    switch (kind) {
+      case 'allow_once':
+      case 'allowOnce':
+        return '允许一次';
+      case 'allow_always':
+      case 'allowAlways':
+        return '始终允许';
+      case 'deny':
+        return '拒绝';
+      case 'custom':
+        return '自定义';
+      default:
+        return '';
+    }
+  }
 
   /// Permission prompt: the tool's human-readable reason.
   String get prompt {

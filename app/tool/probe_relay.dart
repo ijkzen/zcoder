@@ -1,18 +1,13 @@
 /// Probe: connect to the relay as a terminal and print every server frame.
 /// Run with `dart run tool/probe_relay.dart "<qr-url>"`.
+library;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
-
-const relayWsUrl = 'wss://zcode.z.ai/ws';
-
-String calculateProof(String passHash, String nonce, String entity, String deviceSid) {
-  final hmac = Hmac(sha256, utf8.encode(passHash));
-  final digest = hmac.convert(utf8.encode('$deviceSid|$nonce|$entity'));
-  return base64Url.encode(digest.bytes).replaceAll('=', '');
-}
+import 'package:zcode_remote/src/protocol/relay/relay_client.dart'
+    show calculateProof, relayWsUrl;
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {

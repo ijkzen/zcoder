@@ -8,12 +8,12 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint;
 
-import 'core/random_ids.dart' as ids;
+import 'protocol/core/random_ids.dart' as ids;
 import 'bridge/bridge_manager.dart';
-import 'relay/relay_client.dart';
-import 'relay/relay_types.dart';
+import 'protocol/relay/relay_client.dart';
+import 'protocol/relay/relay_frame.dart';
 import 'session/conversation_controller.dart';
-import 'session/models.dart';
+import 'protocol/topics/topic_models.dart';
 import 'storage/app_database.dart';
 
 /// Callbacks the notification layer hooks into.
@@ -271,21 +271,21 @@ class AppController extends ChangeNotifier {
   /// the zcode-session service — no baseRevision needed.
   Future<void> switchModel(String provider, String model,
       {String? thoughtLevel}) async {
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
+    final service = _bridge?.sessionService;
+    if (service == null) throw StateError('未连接');
     final sessionId = _conversation?.state?.sessionId;
     if (sessionId == null) throw StateError('会话未打开');
-    await channel.setSessionModel(sessionId,
+    await service.setModel(sessionId,
         provider: provider, model: model, thoughtLevel: thoughtLevel);
   }
 
   /// Switches the open session's thought level (reasoning effort).
   Future<void> switchThoughtLevel(String thoughtLevel) async {
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
+    final service = _bridge?.sessionService;
+    if (service == null) throw StateError('未连接');
     final sessionId = _conversation?.state?.sessionId;
     if (sessionId == null) throw StateError('会话未打开');
-    await channel.setSessionThoughtLevel(sessionId, thoughtLevel);
+    await service.setThoughtLevel(sessionId, thoughtLevel);
   }
 
   Future<void> resolveInteraction(
@@ -315,9 +315,9 @@ class AppController extends ChangeNotifier {
   Future<SessionModelConfig> fetchWorkspaceModelConfig() async {
     final cached = _workspaceModelConfigCache;
     if (cached != null) return cached;
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
-    final result = await channel.readWorkspaceState();
+    final service = _bridge?.sessionService;
+    if (service == null) throw StateError('未连接');
+    final result = await service.readWorkspaceState();
     final settings = result['settings'];
     final config = SessionModelConfig.fromSettings(
       settings is Map<String, Object?> ? settings : null,
@@ -387,16 +387,16 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> renameSession(String sessionId, String title) async {
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
-    await channel.renameTask(sessionId, title);
+    final service = _bridge?.taskService;
+    if (service == null) throw StateError('未连接');
+    await service.renameTask(sessionId, title);
     await refreshSessions();
   }
 
   Future<void> archiveSession(String sessionId) async {
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
-    await channel.archiveTask(sessionId);
+    final service = _bridge?.taskService;
+    if (service == null) throw StateError('未连接');
+    await service.archiveTask(sessionId);
     // Optimistic removal — the desktop keeps archived tasks in the payload
     // (flagged archived:true); the refresh below reconciles the list.
     _workspaces.removeWhere((w) => w.taskId == sessionId);
@@ -407,12 +407,12 @@ class AppController extends ChangeNotifier {
   /// Archives several sessions at once. Returns the number that failed
   /// (0 = all archived). Removes the succeeded ones optimistically.
   Future<int> archiveSessions(List<String> sessionIds) async {
-    final channel = _bridge?.sessionChannel;
-    if (channel == null) throw StateError('未连接');
+    final service = _bridge?.taskService;
+    if (service == null) throw StateError('未连接');
     final failed = <String>[];
     for (final id in sessionIds) {
       try {
-        await channel.archiveTask(id);
+        await service.archiveTask(id);
         _workspaces.removeWhere((w) => w.taskId == id);
       } catch (_) {
         failed.add(id);
@@ -439,8 +439,8 @@ class AppController extends ChangeNotifier {
       );
       await bridge.selectWorkspace(representative);
     }
-    final channel = bridge.sessionChannel;
-    if (channel == null) throw StateError('未连接');
+    final service = bridge.taskService;
+    if (service == null) throw StateError('未连接');
     final targets = _workspaces
         .where((w) => w.workspaceKey == workspaceKey && w.taskId != null)
         .map((w) => w.taskId!)
@@ -448,7 +448,7 @@ class AppController extends ChangeNotifier {
     var failed = 0;
     for (final id in targets) {
       try {
-        await channel.deleteTask(id);
+        await service.deleteTask(id);
         _workspaces.removeWhere((w) => w.taskId == id);
       } catch (_) {
         failed++;

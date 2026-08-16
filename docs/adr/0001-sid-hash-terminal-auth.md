@@ -1,6 +1,6 @@
 # Terminal authentication uses the QR URL's sid+hash, not a Z.AI OAuth login
 
-The web remote page shows a Z.AI account login, but the relay's wire protocol authenticates terminals purely with the QR credential: `auth_init(role: "terminal")` → `auth_challenge(nonce)` → `auth_response` proving possession of the `hash` param via `HMAC-SHA256(passHash, "$sid|$nonce|terminal")`. The Flutter app implements this handshake directly and has no login screen.
+The web remote page shows a Z.AI account login, but the relay's wire protocol authenticates terminals purely with the QR credential: `auth_init(role: "terminal")` → `auth_challenge(nonce)` → `auth_response` proving possession of the `hash` param via `HMAC-SHA256(passHash, "$nonce|$role|$sid")` (both roles use this order — see `calculateProof` in the desktop's `out/main/index.js`, and docs/protocol/01-relay-transport.md; an earlier revision of this ADR misstated the order as `sid|nonce|role`). The Flutter app implements this handshake directly and has no login screen.
 
 **Why not OAuth:** the relay never demands an account for the terminal flow we reverse-engineered, and registering a public OAuth client for a third-party app is not something we can do. Adding OAuth later would only mean an extra step before the same handshake.
 

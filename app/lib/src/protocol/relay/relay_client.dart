@@ -1,17 +1,18 @@
-/// Relay WebSocket client: connects to `wss://zcode.z.ai/ws`, performs the
-/// terminal auth handshake (sid + hash proof), keeps the pairing alive with
-/// heartbeats, reconnects with exponential backoff, and forwards application
-/// payloads.
+/// Layer 1 — relay WebSocket client: connects to `wss://zcode.z.ai/ws`,
+/// performs the terminal auth handshake (sid + hash proof), keeps the pairing
+/// alive with heartbeats, reconnects with exponential backoff, and forwards
+/// application payloads. See docs/protocol/01-relay-transport.md.
 library;
+
+import '../zlog.dart';
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
 
-import 'relay_types.dart';
+import 'relay_frame.dart';
 
 const String relayWsUrl = 'wss://zcode.z.ai/ws';
 const int heartbeatIntervalMs = 10000;
@@ -29,10 +30,11 @@ class RelayFailure {
 
 /// HMAC proof for the relay auth challenge.
 ///
-/// The terminal role concatenates `nonce|entity|deviceSid` — this matches the
-/// web client (`_tn` in the web bundle: `update(\`${nonce}|${entity}|${sid}\`)`).
-/// Note the desktop *device* role uses a different order (`sid|nonce|entity`),
-/// so do not "unify" these two.
+/// Both roles use the same message layout — `nonce|role|sid` — per the
+/// desktop's `calculateProof(passHash, nonce, role, sid)` =
+/// `HMAC-SHA256(passHash, "${nonce}|${role}|${sid}")` (base64url, unpadded).
+/// (ADR-0001's older `sid|nonce|role` wording is wrong; see
+/// docs/protocol/07-flutter-app-audit.md finding 8.)
 String calculateProof(String passHash, String nonce, String entity, String deviceSid) {
   final hmac = Hmac(sha256, utf8.encode(passHash));
   final digest = hmac.convert(utf8.encode('$nonce|$entity|$deviceSid'));
@@ -91,7 +93,7 @@ class RelayClient {
       _socket = socket;
       _reconnectAttempt = 0;
       socket.listen(_onRawMessage, onDone: _onSocketClosed, onError: _onSocketError);
-      debugPrint('[zremote] relay connected, sending auth_init (sid=${credential.deviceSid})');
+      zlog('[zremote] relay connected, sending auth_init (sid=${credential.deviceSid})');
       _send(AuthInit(
         role: 'terminal',
         deviceSid: credential.deviceSid,
@@ -118,14 +120,14 @@ class RelayClient {
     if (msg == null) return;
     switch (msg) {
       case AuthChallenge(:final nonce):
-        debugPrint('[zremote] auth_challenge received, sending proof');
+        zlog('[zremote] auth_challenge received, sending proof');
         _send(AuthResponse(
           deviceSid: credential.deviceSid,
           proof: calculateProof(credential.passHash, nonce, 'terminal', credential.deviceSid),
           clientTs: DateTime.now().millisecondsSinceEpoch,
         ));
       case AuthAck(:final pairStatus):
-        debugPrint('[zremote] auth_ack pair_status=$pairStatus');
+        zlog('[zremote] auth_ack pair_status=$pairStatus');
         if (pairStatus == 'matched') {
           _cancelWaitingTimeout();
           _setState(RelayState.paired);
@@ -137,7 +139,7 @@ class RelayClient {
           _startWaitingTimeout();
         }
       case PairStatusAck(:final pairStatus):
-        debugPrint('[zremote] pair_status_ack pair_status=$pairStatus');
+        zlog('[zremote] pair_status_ack pair_status=$pairStatus');
         if (pairStatus == 'matched' && _state != RelayState.paired) {
           _cancelWaitingTimeout();
           _setState(RelayState.paired);
@@ -145,10 +147,9 @@ class RelayClient {
         }
         _resetHeartbeatTimeout();
       case DataMessage(:final payload):
-        debugPrint('[zremote] data payload: zcode_type=${payload['zcode_type']}');
         if (!_disposed) _payloadController.add(payload);
       case RelayError(:final code, :final message):
-        debugPrint('[zremote] relay error: code=$code message=$message');
+        zlog('[zremote] relay error: code=$code message=$message');
         _emitFailure(RelayFailure(_mapErrorCode(code), message));
         if (code == RelayErrorCode.authFailed) {
           _userClosed = true;
@@ -168,7 +169,7 @@ class RelayClient {
   void _startWaitingTimeout() {
     _waitingTimer?.cancel();
     _waitingTimer = Timer(const Duration(seconds: 60), () {
-      debugPrint('[zremote] waiting for desktop timed out, reconnecting');
+      zlog('[zremote] waiting for desktop timed out, reconnecting');
       _waitingTimer = null;
       _socket?.close();
     });
@@ -279,7 +280,7 @@ class RelayClient {
     _heartbeatTimeoutTimer = null;
   }
 
-  /// Sends an application payload as a relay `data` frame.
+  /// Sends an application payload as a relay `data` frame (layer 2+).
   void sendPayload(Map<String, Object?> payload) {
     _send(DataMessage(payload: payload, clientTs: DateTime.now().millisecondsSinceEpoch));
   }

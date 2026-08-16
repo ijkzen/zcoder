@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zcode_remote/src/session/models.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 
 /// Guards the pending-interaction parsing/answering contract against the
 /// desktop's zod schemas (permission & userInput payloads, and the

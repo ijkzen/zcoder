@@ -22,3 +22,4 @@ android/app/build/
 .verify/
 screen*.png
 s*.png
+.analysis/

@@ -1,15 +1,20 @@
 /// Applies conversation snapshots and deltas to an in-memory row store, and
 /// exposes the current state as a change-notifying model the UI renders from.
+///
+/// Live updates arrive as topic wire frames (reassembled in the protocol
+/// module); a rows-range poll and a readSession poll run alongside as a
+/// fallback for the fields event push does not carry to terminal connections.
 library;
 
-import 'dart:async';
+import '../protocol/zlog.dart';
 
-import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'dart:collection';
 
+
 import '../bridge/bridge_manager.dart';
-import '../session/models.dart';
-import '../session/session_channel.dart';
+import '../protocol/protocol.dart';
+import '../protocol/topics/topic_models.dart';
 
 class ConversationState {
   final String sessionId;
@@ -21,8 +26,8 @@ class ConversationState {
   Map<String, Object?>? meta;
   Map<String, Object?>? config;
   List<PendingInteraction> pendingInteractions;
-  // readSession polling state (event push never arrives, so approvals,
-  // context usage and model config all come from the readSession RPC).
+  // readSession polling state (snapshot-only fields: approvals, context
+  // usage and model config all come from the readSession RPC).
   List<PendingRequest> pendingRequests;
   ContextUsage contextUsage;
   SessionModelConfig modelConfig;
@@ -56,9 +61,9 @@ class ConversationState {
 
   List<ConversationRow> get orderedRows => rows.values.toList();
 
-  /// control.canStop — but only when the snapshot actually carried it. Without
-  /// event push the snapshot never arrives, so null means "unknown": the UI
-  /// then falls back to enabled-while-connected.
+  /// control.canStop — but only when the snapshot actually carried it.
+  /// null means "unknown": the UI falls back to the readSession poll's
+  /// sessionStatus.
   bool? get canStopOrNull {
     if (control.containsKey('canStop')) return control['canStop'] as bool?;
     return null;
@@ -68,10 +73,8 @@ class ConversationState {
   String get phase => control['phase']?.toString() ?? '';
   bool get sessionEnded => control['sessionEnded'] as bool? ?? false;
 
-  /// Whether the agent has work in flight. sessionStatus comes from the
-  /// readSession poll (it stays "running" while a turn is alive, including
-  /// while it waits on an approval/question); control.canStop would be the
-  /// event-push snapshot's signal, unioned in for the day push works.
+  /// Whether the agent has work in flight: the event-push snapshot's
+  /// control.canStop unioned with readSession's session.status.
   bool get isAgentRunning =>
       sessionStatus == 'running' || (canStopOrNull ?? false);
 
@@ -159,8 +162,8 @@ class ConversationState {
   }
 }
 
-/// Owns the subscription to one conversation topic and the pending-interaction
-/// bookkeeping.
+/// Owns the subscription to one conversation topic, applies topic frames
+/// (snapshot + deltas with gap recovery), and runs the fallback polls.
 class ConversationController {
   final BridgeManager bridge;
   final String sessionId;
@@ -177,14 +180,15 @@ class ConversationController {
   ConversationState? get state => _state;
 
   String? _subscriptionId;
+  String? _topicSeqEpoch;
+  int _topicSeq = 0;
+  bool _hasBase = false;
   StreamSubscription<TopicFrame>? _frameSub;
   bool _disposed = false;
-  String? _topic;
 
   Future<void> start() async {
-    final channel = bridge.sessionChannel;
+    final channel = bridge.topicSession;
     if (channel == null) throw StateError('no session channel');
-    _topic = 'conversation/$sessionId';
 
     _frameSub = channel.conversationFrames.listen(_onFrame);
 
@@ -193,11 +197,7 @@ class ConversationController {
     if (!_disposed) _connectedController.add(true);
     // Best-effort snapshot via resync; the reliable path is the rows poll
     // below (RPC calls work even when event push does not).
-    try {
-      await channel.resyncConversation(ack.subscriptionId, sessionId, logEpoch: ack.logEpoch);
-    } catch (e) {
-      debugPrint('[zremote] conversation resync failed: $e');
-    }
+    await _resync();
     // Poll the latest rows until the session channel is disposed. The first
     // pull fetches a deep window (history); steady-state pulls only need the
     // tail — a full 200-row window is ~370 KB, too heavy for 2s polling.
@@ -215,17 +215,77 @@ class ConversationController {
 
   Timer? _pollTimer;
   Timer? _tokenTimer;
-  bool _loggedRowsKeys = false;
+
+  Future<void> _resync() async {
+    final channel = bridge.topicSession;
+    final subscriptionId = _subscriptionId;
+    if (channel == null || subscriptionId == null) return;
+    try {
+      await channel.resyncConversation(
+        subscriptionId,
+        sessionId,
+        logEpoch: _hasBase ? _topicSeqEpoch : null,
+        seq: _topicSeq,
+      );
+    } catch (e) {
+      zlog('[zremote] conversation resync failed: $e');
+    }
+  }
+
+  void _onFrame(TopicFrame frame) {
+    if (frame.topic != 'conversation/$sessionId') return;
+    final snapshot = frame.snapshot;
+    if (snapshot != null) {
+      if (_hasBase && frame.deliveryKind == 'online' && frame.toSeq <= _topicSeq) {
+        return; // stale replay
+      }
+      _topicSeqEpoch = snapshot['logEpoch'] is String
+          ? snapshot['logEpoch'] as String
+          : _topicSeqEpoch;
+      _topicSeq = frame.toSeq;
+      _hasBase = true;
+      final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+      state.applySnapshot(ConversationSnapshot.fromJson(snapshot));
+      _emit();
+      return;
+    }
+    final deltas = frame.deltas;
+    if (deltas == null) return;
+    if (!_hasBase) {
+      _resync();
+      return;
+    }
+    if (frame.toSeq <= _topicSeq) return; // duplicate
+    if (frame.fromSeq != _topicSeq) {
+      // Gap — recover from the last known base.
+      _resync();
+      return;
+    }
+    final state = _state;
+    if (state == null) return;
+    for (final d in deltas.whereType<Map<String, Object?>>()) {
+      state.applyDelta(d);
+    }
+    _topicSeq = frame.toSeq;
+    _emit();
+  }
+
+  void _emit() {
+    final state = _state;
+    if (!_disposed && state != null && !_stateController.isClosed) {
+      _stateController.add(state);
+    }
+  }
 
   /// Pulls the live snapshot-ish state via readSession: pending requests
   /// (approvals + AskUserQuestion), context usage, and the session's model /
-  /// thought level. Runs alongside the rows poll because event push never
-  /// delivers these fields to terminal connections.
+  /// thought level. Runs alongside the rows poll because event push does not
+  /// deliver these fields to terminal connections.
   Future<void> pollSessionState() async {
-    final channel = bridge.sessionChannel;
-    if (channel == null) return;
+    final service = bridge.sessionService;
+    if (service == null) return;
     try {
-      final result = await channel.readSession(sessionId);
+      final result = await service.readSession(sessionId, messageLimit: 1);
       final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
       state.applyReadSession(result);
       final settings = result['settings'];
@@ -249,7 +309,7 @@ class ConversationController {
               .toList();
         }
       }
-      if (!_disposed && !_stateController.isClosed) _stateController.add(state);
+      _emit();
     } catch (e) {
       // A session the runtime has unloaded answers "Session is not active"
       // forever after — it is definitely not running, so clear a stale
@@ -258,27 +318,25 @@ class ConversationController {
         final state = _state;
         if (state != null && state.sessionStatus == 'running') {
           state.sessionStatus = 'idle';
-          if (!_disposed && !_stateController.isClosed) {
-            _stateController.add(state);
-          }
+          _emit();
         }
       }
-      debugPrint('[zremote] readSession poll failed: $e');
+      zlog('[zremote] readSession poll failed: $e');
     }
   }
 
   /// Pulls cumulative token counters for the token-usage detail sheet.
   Future<void> pollTokenUsage() async {
-    final channel = bridge.sessionChannel;
-    if (channel == null) return;
+    final service = bridge.taskService;
+    if (service == null) return;
     try {
-      final result = await channel.getTaskTokenUsage(sessionId);
+      final result = await service.getTaskTokenUsage(sessionId);
       final state = _state;
       if (state == null || result.isEmpty) return;
       state.tokenUsage = result;
-      if (!_disposed && !_stateController.isClosed) _stateController.add(state);
+      _emit();
     } catch (e) {
-      debugPrint('[zremote] token usage poll failed: $e');
+      zlog('[zremote] token usage poll failed: $e');
     }
   }
 
@@ -288,27 +346,21 @@ class ConversationController {
   /// produced faster than the window covered — refetch deep once. A max-rowId
   /// regression means the desktop rewound (row.removed) — drop stale tails.
   Future<void> pollLatest({int limit = 60}) async {
-    final channel = bridge.sessionChannel;
+    final channel = bridge.topicSession;
     if (channel == null) return;
     try {
-      final result = await channel.requestRowsRange(sessionId, limit: limit);
+      final result = await channel.rowsRange(sessionId, limit: limit);
       final rows = result['rows'];
       if (rows is! List) return;
       final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
-      // One-time diagnostics: which snapshot-ish fields (if any) the host
-      // inlines into rowsRange responses — decides whether approvals can ride
-      // the poll while event push is broken.
-      if (!_loggedRowsKeys) {
-        _loggedRowsKeys = true;
-        debugPrint('[zremote] rowsRange keys: ${result.keys.toList()}');
-      }
       final atLogEpoch = result['atLogEpoch'];
       if (atLogEpoch is String && atLogEpoch.isNotEmpty) {
         state.logEpoch = atLogEpoch;
       }
       // Some host builds inline snapshot fields (control/pendingInteractions/
       // meta) in the rowsRange response; when present they are the only way
-      // approvals reach us while event push (204 frames) is broken.
+      // approvals and the notification feed reach us while event push (204
+      // frames) is broken (E2E-verified 2026-08-16).
       final control = result['control'];
       if (control is Map<String, Object?>) state.control = control;
       final meta = result['meta'];
@@ -341,9 +393,9 @@ class ConversationController {
       for (final row in parsed) {
         state.rows[row.rowId] = row;
       }
-      if (!_disposed && !_stateController.isClosed) _stateController.add(state);
+      _emit();
     } catch (e) {
-      debugPrint('[zremote] rows poll failed: $e');
+      zlog('[zremote] rows poll failed: $e');
     }
   }
 
@@ -354,49 +406,16 @@ class ConversationController {
     for (final row in rows) {
       state.rows[row.rowId] = row;
     }
-    if (!_disposed && !_stateController.isClosed) _stateController.add(state);
-  }
-
-  void _onFrame(TopicFrame frame) {
-    switch (frame) {
-      case TopicDataFrame():
-        _applyTopicFrame(frame);
-      case SubscribeAckFrame():
-        _subscriptionId = frame.subscriptionId;
-      default:
-        break;
-    }
-  }
-
-  void _applyTopicFrame(TopicDataFrame frame) {
-    final state = _state;
-    if (state == null) return;
-    if (frame.isSnapshot) {
-      final snapshotJson = frame.snapshot;
-      if (snapshotJson != null) {
-        state.applySnapshot(ConversationSnapshot.fromJson(snapshotJson));
-      }
-    } else {
-      final deltas = frame.deltas;
-      if (deltas != null) {
-        for (final d in deltas.whereType<Map<String, Object?>>()) {
-          state.applyDelta(d);
-        }
-      }
-    }
-    if (!_disposed && !_stateController.isClosed) _stateController.add(state);
+    _emit();
   }
 
   Future<void> loadOlderRows() async {
     final state = _state;
-    final channel = bridge.sessionChannel;
+    final channel = bridge.topicSession;
     if (state == null || channel == null || state.rows.isEmpty) return;
     final firstRowId = state.rows.firstKey();
     if (firstRowId == null) return;
-    final result = await channel.requestRowsRange(
-      sessionId,
-      beforeRowId: firstRowId,
-    );
+    final result = await channel.rowsRange(sessionId, beforeRowId: firstRowId);
     final rows = result['rows'];
     final hasMore = result['hasMore'] as bool? ?? false;
     if (rows is List) {
@@ -405,7 +424,7 @@ class ConversationController {
         state.rows[row.rowId] = row;
       }
       state.needsOlderRows = hasMore;
-      if (!_disposed && !_stateController.isClosed) _stateController.add(state);
+      _emit();
     }
   }
 
@@ -414,10 +433,11 @@ class ConversationController {
     _pollTimer?.cancel();
     _tokenTimer?.cancel();
     await _frameSub?.cancel();
-    final channel = bridge.sessionChannel;
-    if (channel != null && _subscriptionId != null && _topic != null) {
+    final channel = bridge.topicSession;
+    final subscriptionId = _subscriptionId;
+    if (channel != null && subscriptionId != null) {
       try {
-        await channel.unsubscribe(_topic!, _subscriptionId!);
+        await channel.unsubscribeConversation(sessionId, subscriptionId);
       } catch (_) {}
     }
     await _stateController.close();

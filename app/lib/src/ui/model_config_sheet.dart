@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../session/models.dart';
+import '../protocol/topics/topic_models.dart';
 
 /// Bottom-sheet picker for a session's model + thought level, as a three-level
 /// cascade: Provider → Model → thought level (the levels a model supports).

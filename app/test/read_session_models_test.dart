@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zcode_remote/src/session/models.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 
 void main() {
   group('PendingRequest (readSession pendingPermissions)', () {

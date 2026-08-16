@@ -10,7 +10,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../app_controller.dart';
 import '../bridge/bridge_manager.dart';
-import '../session/models.dart';
+import '../protocol/topics/topic_models.dart';
 
 class NotificationService {
   NotificationService._();

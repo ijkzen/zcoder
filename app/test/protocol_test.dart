@@ -3,11 +3,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zcode_remote/src/bridge/binary_rpc.dart';
-import 'package:zcode_remote/src/core/crc32.dart';
-import 'package:zcode_remote/src/core/varint.dart';
-import 'package:zcode_remote/src/relay/relay_client.dart';
-import 'package:zcode_remote/src/relay/relay_types.dart';
+import 'package:zcode_remote/src/protocol/rpc/channel_client.dart';
+import 'package:zcode_remote/src/protocol/core/crc32.dart';
+import 'package:zcode_remote/src/protocol/core/varint.dart';
+import 'package:zcode_remote/src/protocol/relay/relay_client.dart';
+import 'package:zcode_remote/src/protocol/relay/relay_frame.dart';
+import 'package:zcode_remote/src/protocol/topics/wire_frame.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
+import 'package:zcode_remote/src/protocol/payload/app_payload.dart';
+import 'package:zcode_remote/src/protocol/transport/rpc_frame_transport.dart';
+import 'package:zcode_remote/src/protocol/limits.dart';
 
 void main() {
   group('varint', () {
@@ -113,7 +118,7 @@ void main() {
     test('request encoding: raw body, no socket header', () async {
       final sent = <Uint8List>[];
       final serverFrames = StreamController<Uint8List>.broadcast();
-      final client = BinaryRpcClient(serverFrames.stream, sent.add);
+      final client = ChannelClient(serverFrames.stream, sent.add);
       client.start();
       await _sendInitialize(serverFrames);
       await client.whenInitialized;
@@ -141,7 +146,7 @@ void main() {
     test('response decoding: PromiseSuccess resolves the call', () async {
       final sent = <Uint8List>[];
       final serverFrames = StreamController<Uint8List>.broadcast();
-      final client = BinaryRpcClient(serverFrames.stream, sent.add);
+      final client = ChannelClient(serverFrames.stream, sent.add);
       client.start();
       await _sendInitialize(serverFrames);
       await client.whenInitialized;
@@ -183,7 +188,7 @@ void main() {
     test('response decoding: PromiseError rejects with RpcError', () async {
       final sent = <Uint8List>[];
       final serverFrames = StreamController<Uint8List>.broadcast();
-      final client = BinaryRpcClient(serverFrames.stream, sent.add);
+      final client = ChannelClient(serverFrames.stream, sent.add);
       client.start();
       await _sendInitialize(serverFrames);
       await client.whenInitialized;
@@ -211,7 +216,7 @@ void main() {
     test('events: EventListen then EventFire streams data', () async {
       final sent = <Uint8List>[];
       final serverFrames = StreamController<Uint8List>.broadcast();
-      final client = BinaryRpcClient(serverFrames.stream, sent.add);
+      final client = ChannelClient(serverFrames.stream, sent.add);
       client.start();
       await _sendInitialize(serverFrames);
       await client.whenInitialized;
@@ -235,6 +240,507 @@ void main() {
 
       await sub.cancel();
       await serverFrames.close();
+    });
+  });
+
+  group('app payload codec', () {
+    test('parses workspace-list-response', () {
+      final payload = parseAppPayload({
+        'zcode_type': 'workspace-list-response',
+        'requestId': 'r1',
+        'success': true,
+        'result': {
+          'workspaces': [
+            {'workspacePath': '/a', 'label': 'a', 'kind': 'local'}
+          ],
+          'tasks': [
+            {'taskId': 't1', 'title': 'T', 'workspacePath': '/a', 'workspaceLabel': 'a', 'workspaceKind': 'local', 'createdAt': 1, 'updatedAt': 2}
+          ],
+          'activeWorkspaceKey': '/a',
+        },
+      });
+      expect(payload, isA<WorkspaceListResponse>());
+      final list = payload as WorkspaceListResponse;
+      expect(list.requestId, 'r1');
+      expect(list.data.tasks!.single['taskId'], 't1');
+      expect(list.data.activeWorkspaceKey, '/a');
+    });
+
+    test('parses bridge identity fields', () {
+      final ready = parseAppPayload({
+        'zcode_type': 'workspace-bridge-ready',
+        'requestId': 'r2',
+        'bridgeSessionId': 'bs1',
+        'bridgeGeneration': 3,
+        'bridge': {'bridgeSessionId': 'bs1', 'kind': 'local', 'workspaceKey': '/a'},
+      });
+      expect(ready, isA<WorkspaceBridgeReady>());
+      final b = ready as WorkspaceBridgeReady;
+      expect(b.identity.bridgeSessionId, 'bs1');
+      expect(b.identity.bridgeGeneration, 3);
+      expect(b.identity.matches({'bridgeSessionId': 'bs1', 'bridgeGeneration': 3}), isTrue);
+      expect(b.identity.matches({'bridgeSessionId': 'other'}), isFalse);
+    });
+
+    test('rpc payloads pass through raw', () {
+      final frame = parseAppPayload({'zcode_type': 'rpc-frame', 'bridgeSessionId': 'bs1', 'seq': 1});
+      expect(frame, isA<RpcTransportPayload>());
+      expect((frame as RpcTransportPayload).isAck, isFalse);
+    });
+
+    test('mobile view state includes required updatedAt', () {
+      final payload = mobileViewStateUpdate(
+        activeWorkspaceKey: '/a',
+        deviceInfo: mobileDeviceInfo(platform: 'android', version: '1', name: 'n'),
+      );
+      final viewState = payload['viewState'] as Map<String, Object?>;
+      final deviceInfo = payload['deviceInfo'] as Map<String, Object?>;
+      expect(viewState['updatedAt'], isA<int>());
+      expect(deviceInfo['updatedAt'], isA<int>());
+    });
+  });
+
+  group('rpc frame transport', () {
+    test('delivers assembled messages and acks them', () async {
+      final sent = <Map<String, Object?>>[];
+      final messages = <Uint8List>[];
+      final transport = RpcFrameTransport(
+        sendPayload: sent.add,
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1', bridgeGeneration: 1),
+      );
+      transport.messageStream.listen(messages.add);
+
+      final body = utf8.encode('hello world');
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame',
+        'bridgeSessionId': 'bs1',
+        'bridgeGeneration': 1,
+        'seq': 1,
+        'messageSeq': 7,
+        'fragmentIndex': 0,
+        'fragmentCount': 2,
+        'messageBytes': body.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+        'dataBase64': base64Encode(body.sublist(0, 5)),
+      });
+      expect(messages, isEmpty, reason: 'waiting for second fragment');
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame',
+        'bridgeSessionId': 'bs1',
+        'bridgeGeneration': 1,
+        'seq': 2,
+        'messageSeq': 7,
+        'fragmentIndex': 1,
+        'fragmentCount': 2,
+        'messageBytes': body.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+        'dataBase64': base64Encode(body.sublist(5)),
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(utf8.decode(messages.single), 'hello world');
+      expect(sent.single['zcode_type'], 'rpc-frame-ack');
+      expect(sent.single['ackMessageSeq'], 7);
+      await transport.dispose();
+    });
+
+    test('duplicate messages are re-acked then dropped', () async {
+      final sent = <Map<String, Object?>>[];
+      final messages = <Uint8List>[];
+      final transport = RpcFrameTransport(
+        sendPayload: sent.add,
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.messageStream.listen(messages.add);
+      final body = utf8.encode('x');
+      Map<String, Object?> frame(int seq) => {
+            'zcode_type': 'rpc-frame',
+            'bridgeSessionId': 'bs1',
+            'seq': seq,
+            'messageSeq': 1,
+            'fragmentIndex': 0,
+            'fragmentCount': 1,
+            'messageBytes': 1,
+            'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+            'dataBase64': base64Encode(body),
+          };
+      transport.acceptPayload(frame(1));
+      transport.acceptPayload(frame(1)); // replay after a missed ack
+      await Future<void>.delayed(Duration.zero);
+      expect(messages, hasLength(1), reason: 'delivered exactly once');
+      expect(sent.where((p) => p['zcode_type'] == 'rpc-frame-ack'), hasLength(2),
+          reason: 'but re-acked for the replay');
+      await transport.dispose();
+    });
+
+    test('frames from a foreign bridge identity are dropped', () async {
+      final messages = <Uint8List>[];
+      final transport = RpcFrameTransport(
+        sendPayload: (_) {},
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.messageStream.listen(messages.add);
+      final body = utf8.encode('x');
+      final accepted = transport.acceptPayload({
+        'zcode_type': 'rpc-frame',
+        'bridgeSessionId': 'STALE',
+        'seq': 1,
+        'messageSeq': 1,
+        'fragmentIndex': 0,
+        'fragmentCount': 1,
+        'messageBytes': 1,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+        'dataBase64': base64Encode(body),
+      });
+      expect(accepted, isFalse);
+      expect(messages, isEmpty);
+      await transport.dispose();
+    });
+
+    test('outbound messages replay until acked', () async {
+      final sent = <Map<String, Object?>>[];
+      final transport = RpcFrameTransport(
+        sendPayload: sent.add,
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.sendMessage(utf8.encode('one'));
+      transport.sendMessage(utf8.encode('two'));
+      final firstRound = sent.where((p) => p['zcode_type'] == 'rpc-frame').length;
+      expect(firstRound, 2);
+
+      // Relay dropped everything — reconnect replays both from fragment 0.
+      sent.clear();
+      transport.replayUnacked();
+      expect(sent.where((p) => p['zcode_type'] == 'rpc-frame').length, 2);
+      expect(sent.first['messageSeq'], 1);
+
+      // Cumulative ack for message 1 releases only it.
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame-ack',
+        'bridgeSessionId': 'bs1',
+        'ackMessageSeq': 1,
+      });
+      sent.clear();
+      transport.replayUnacked();
+      expect(sent.where((p) => p['zcode_type'] == 'rpc-frame').length, 1);
+      expect(sent.first['messageSeq'], 2);
+      await transport.dispose();
+    });
+
+    test('acking an unsent messageSeq degrades the transport', () async {
+      final degraded = <String>[];
+      final transport = RpcFrameTransport(
+        sendPayload: (_) {},
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.degradedStream.listen(degraded.add);
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame-ack',
+        'bridgeSessionId': 'bs1',
+        'ackMessageSeq': 9, // nothing was ever sent
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(degraded, [RpcFrameFault.futureAck]);
+      await transport.dispose();
+    });
+  });
+
+  group('topic wire frames', () {
+    test('complete frames pass the inner topic frame through', () {
+      final assembler = WireFrameAssembler();
+      final inner = assembler.accept({
+        'wireVersion': 3,
+        'kind': 'complete',
+        'deliveryKind': 'online',
+        'logicalFrameId': 'lf1',
+        'logicalFrameOrdinal': 1,
+        'topic': 'conversation/s1',
+        'subscriptionId': 'sub1',
+        'frame': {
+          'topic': 'conversation/s1',
+          'subscriptionId': 'sub1',
+          'fromSeq': 0,
+          'toSeq': 5,
+          'payload': {'kind': 'snapshot', 'snapshot': {'logEpoch': 'e1'}},
+        },
+      });
+      expect(inner, isNotNull);
+      expect(inner!.deliveryKind, 'online');
+      expect(inner.logicalFrameOrdinal, 1);
+      final frame =
+          TopicFrame.fromMap(inner.frame, deliveryKind: inner.deliveryKind);
+      expect(frame!.topic, 'conversation/s1');
+      expect(frame.isSnapshot, isTrue);
+      expect(frame.snapshot!['logEpoch'], 'e1');
+      expect(frame.deliveryKind, 'online');
+    });
+
+    test('fragments reassemble by logicalFrameId with crc check', () {
+      final assembler = WireFrameAssembler();
+      final innerJson = utf8.encode(jsonEncode({
+        'topic': 'conversation/s1',
+        'subscriptionId': 'sub1',
+        'fromSeq': 5,
+        'toSeq': 6,
+        'payload': {'kind': 'deltas', 'deltas': [{'op': 'row.appended'}]},
+      }));
+      final a = innerJson.sublist(0, 4);
+      final b = innerJson.sublist(4);
+      expect(assembler.accept({
+        'wireVersion': 3,
+        'kind': 'fragment',
+        'logicalFrameId': 'lf2',
+        'topic': 'conversation/s1',
+        'subscriptionId': 'sub1',
+        'fragmentIndex': 0,
+        'fragmentCount': 2,
+        'logicalBytes': innerJson.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(innerJson)},
+        'dataBase64': base64Encode(a),
+      }), isNull);
+      final inner = assembler.accept({
+        'wireVersion': 3,
+        'kind': 'fragment',
+        'logicalFrameId': 'lf2',
+        'topic': 'conversation/s1',
+        'subscriptionId': 'sub1',
+        'fragmentIndex': 1,
+        'fragmentCount': 2,
+        'logicalBytes': innerJson.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(innerJson)},
+        'dataBase64': base64Encode(b),
+      });
+      expect(inner, isNotNull);
+      final frame =
+          TopicFrame.fromMap(inner!.frame, deliveryKind: inner.deliveryKind);
+      final deltas = frame!.deltas;
+      expect((deltas!.single as Map<Object?, Object?>)['op'], 'row.appended');
+      assembler.dispose();
+    });
+
+    test('crc mismatch drops the logical frame', () {
+      final assembler = WireFrameAssembler();
+      final innerJson = utf8.encode('{"topic":"conversation/s1"}');
+      expect(assembler.accept({
+        'kind': 'fragment',
+        'logicalFrameId': 'lf3',
+        'fragmentIndex': 0,
+        'fragmentCount': 1,
+        'checksum': {'algorithm': 'crc32', 'value': 'deadbeef'},
+        'dataBase64': base64Encode(innerJson),
+      }), isNull);
+      assembler.dispose();
+    });
+  });
+
+  group('int32 sign extension', () {
+    test('negative int32 roundtrips through tag 6', () async {
+      final sent = <Uint8List>[];
+      final serverFrames = StreamController<Uint8List>.broadcast();
+      final client = ChannelClient(serverFrames.stream, sent.add);
+      client.start();
+      await _sendInitialize(serverFrames);
+      await client.whenInitialized;
+      final future = client.requestPromise('ch', 'm');
+      await Future<void>.delayed(Duration.zero);
+      final body = sent.single;
+      final (_, header) = _readValue(body, 0);
+      final id = (header as List<Object?>)[1] as int;
+      serverFrames.add(_frame(_encodeValues([MsgType.promiseSuccess, id, '', ''], -5)));
+      expect(await future, -5);
+      await serverFrames.close();
+    });
+  });
+
+
+  group('rpc transport faults (second pass)', () {
+    test('fragmentCount beyond the 64 limit degrades the transport', () async {
+      final degraded = <String>[];
+      final transport = RpcFrameTransport(
+        sendPayload: (_) {},
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.degradedStream.listen(degraded.add);
+      final body = utf8.encode('x');
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame',
+        'bridgeSessionId': 'bs1',
+        'seq': 1,
+        'messageSeq': 1,
+        'fragmentIndex': 0,
+        'fragmentCount': 65,
+        'messageBytes': 1,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+        'dataBase64': base64Encode(body),
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(degraded, [RpcFrameFault.invalidPayload]);
+      await transport.dispose();
+    });
+
+    test('stale inbound assembly degrades with assemblyTimeout', () async {
+      var now = DateTime(2026, 1, 1, 12);
+      final degraded = <String>[];
+      final transport = RpcFrameTransport(
+        sendPayload: (_) {},
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+        now: () => now,
+      );
+      transport.degradedStream.listen(degraded.add);
+      final body = utf8.encode('hello world');
+      transport.acceptPayload({
+        'zcode_type': 'rpc-frame',
+        'bridgeSessionId': 'bs1',
+        'seq': 1,
+        'messageSeq': 1,
+        'fragmentIndex': 0,
+        'fragmentCount': 2,
+        'messageBytes': body.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(body)},
+        'dataBase64': base64Encode(body.sublist(0, 5)),
+      });
+      // Fragment never completes; advance past the 30 s assembly timeout.
+      now = now.add(const Duration(seconds: 31));
+      transport.expireStaleAssemblies();
+      await Future<void>.delayed(Duration.zero);
+      expect(degraded, [RpcFrameFault.assemblyTimeout]);
+      await transport.dispose();
+    });
+
+    test('unacked outbound beyond the 45 s replay grace degrades', () async {
+      var now = DateTime(2026, 1, 1, 12);
+      final degraded = <String>[];
+      final transport = RpcFrameTransport(
+        sendPayload: (_) {},
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+        now: () => now,
+      );
+      transport.degradedStream.listen(degraded.add);
+      transport.sendMessage(utf8.encode('one'));
+      now = now.add(const Duration(seconds: 46));
+      transport.checkReplayGrace();
+      await Future<void>.delayed(Duration.zero);
+      expect(degraded, [RpcFrameFault.replayGraceExceeded]);
+      expect(transport.isDegraded, isTrue);
+      await transport.dispose();
+    });
+
+    test('oversized send throws without degrading the bridge', () async {
+      final degraded = <String>[];
+      final sent = <Map<String, Object?>>[];
+      final transport = RpcFrameTransport(
+        sendPayload: sent.add,
+        identity: const BridgeIdentity(bridgeSessionId: 'bs1'),
+      );
+      transport.degradedStream.listen(degraded.add);
+      expect(
+        () => transport.sendMessage(Uint8List(ProtocolLimits.maxMessageBytes + 1)),
+        throwsA(isA<RpcTransportException>()),
+      );
+      expect(transport.isDegraded, isFalse);
+      // The bridge still works afterwards.
+      transport.sendMessage(utf8.encode('still alive'));
+      expect(sent.where((p) => p['zcode_type'] == 'rpc-frame'), hasLength(1));
+      await transport.dispose();
+    });
+  });
+
+  group('topic wire frames (second pass)', () {
+    test('unknown wireVersion is dropped', () {
+      final assembler = WireFrameAssembler();
+      expect(assembler.accept({
+        'wireVersion': 99,
+        'kind': 'complete',
+        'frame': {'topic': 'conversation/s1'},
+      }), isNull);
+      assembler.dispose();
+    });
+
+    test('deliveryKind survives fragment reassembly', () {
+      final assembler = WireFrameAssembler();
+      final innerJson = utf8.encode(jsonEncode({
+        'topic': 'conversation/s1',
+        'subscriptionId': 'sub1',
+        'fromSeq': 1,
+        'toSeq': 2,
+        'payload': {'kind': 'deltas', 'deltas': []},
+      }));
+      final result = assembler.accept({
+        'wireVersion': 3,
+        'kind': 'fragment',
+        'deliveryKind': 'recovery',
+        'logicalFrameId': 'lf4',
+        'fragmentIndex': 0,
+        'fragmentCount': 1,
+        'logicalBytes': innerJson.length,
+        'checksum': {'algorithm': 'crc32', 'value': crc32Hex(innerJson)},
+        'dataBase64': base64Encode(innerJson),
+      });
+      expect(result, isNotNull);
+      expect(result!.deliveryKind, 'recovery');
+      assembler.dispose();
+    });
+  });
+
+  group('workspace keys', () {
+    test('remote workspace keys use identity, not path', () {
+      final workspace = Workspace.fromJson({
+        'workspacePath': '/remote/proj',
+        'workspaceIdentity': 'ssh:myserver:/proj',
+        'label': 'p',
+        'kind': 'remote',
+      });
+      expect(workspace.workspaceKey, 'ssh:myserver:/proj');
+    });
+
+    test('mergedEntries dedups by workspace key across tasks and workspaces',
+        () {
+      final data = WorkspaceListData.fromResult({
+        'workspaces': [
+          {'workspacePath': '/a', 'label': 'a', 'kind': 'local'},
+          {'workspacePath': '/b', 'label': 'b', 'kind': 'local'},
+        ],
+        'tasks': [
+          {
+            'taskId': 't1',
+            'title': 'T',
+            'workspacePath': '/a',
+            'workspaceLabel': 'a',
+            'workspaceKind': 'local',
+            'createdAt': 1,
+            'updatedAt': 2,
+          },
+        ],
+      })!;
+      final merged = data.mergedEntries;
+      expect(merged, hasLength(2)); // /a deduped, /b kept
+      expect(merged.first['taskId'], 't1');
+    });
+
+    test('mergedEntries keeps remote workspace and task entries apart by key',
+        () {
+      final data = WorkspaceListData.fromResult({
+        'workspaces': [
+          {
+            'workspacePath': '/remote/proj',
+            'workspaceIdentity': 'ssh:srv:/proj',
+            'label': 'p',
+            'kind': 'remote',
+          },
+        ],
+        'tasks': [
+          {
+            'taskId': 't1',
+            'title': 'T',
+            'workspacePath': '/remote/proj',
+            'workspaceIdentity': 'ssh:srv:/proj',
+            'workspaceLabel': 'p',
+            'workspaceKind': 'remote',
+            'createdAt': 1,
+            'updatedAt': 2,
+          },
+        ],
+      })!;
+      expect(data.mergedEntries, hasLength(1));
     });
   });
 }
@@ -283,7 +789,8 @@ void _enc(BytesBuilder out, Object? v) {
     }
   } else if (v is int) {
     out.addByte(_tagInt);
-    _encVarint(out, v);
+    // JS writes the unsigned representation of int32 values.
+    _encVarint(out, v < 0 ? v & 0xFFFFFFFF : v);
   } else {
     final b = utf8.encode(jsonEncode(_jsonSafe(v)));
     out.addByte(_tagObject);

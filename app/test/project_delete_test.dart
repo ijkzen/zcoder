@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:zcode_remote/src/session/models.dart';
+import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 import 'package:zcode_remote/src/ui/workspaces_page.dart';
 
 Workspace _task(
