@@ -423,6 +423,42 @@ class AppController extends ChangeNotifier {
     return failed.length;
   }
 
+  /// Deletes a whole project: every task under one workspaceKey, archived
+  /// ones included (they still ride the workspace-list payload). The zcode-task
+  /// RPCs travel on a workspace bridge, so if the deleted project is not the
+  /// active workspace the bridge is switched to it first. Returns the number
+  /// of tasks that failed to delete (0 = all deleted).
+  Future<int> deleteProject(String workspaceKey) async {
+    final bridge = _bridge;
+    if (bridge == null) throw StateError('未连接');
+    if (_phase != BridgePhase.ready ||
+        bridge.activeWorkspace?.workspaceKey != workspaceKey) {
+      final representative = _workspaces.firstWhere(
+        (w) => w.workspaceKey == workspaceKey,
+        orElse: () => throw StateError('项目不存在'),
+      );
+      await bridge.selectWorkspace(representative);
+    }
+    final channel = bridge.sessionChannel;
+    if (channel == null) throw StateError('未连接');
+    final targets = _workspaces
+        .where((w) => w.workspaceKey == workspaceKey && w.taskId != null)
+        .map((w) => w.taskId!)
+        .toList();
+    var failed = 0;
+    for (final id in targets) {
+      try {
+        await channel.deleteTask(id);
+        _workspaces.removeWhere((w) => w.taskId == id);
+      } catch (_) {
+        failed++;
+      }
+    }
+    notifyListeners();
+    await refreshSessions();
+    return failed;
+  }
+
   /// Re-pulls the workspace/task list so the sessions list reflects remote
   /// changes (rename, archive). Timeouts are swallowed — the workspaces stream
   /// still fires when the response eventually lands.

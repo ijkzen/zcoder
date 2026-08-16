@@ -311,6 +311,18 @@ class SessionChannel {
     return raw is Map<String, Object?> ? raw : const {};
   }
 
+  /// Permanently deletes a task (web client: `zcodeTaskService.deleteTask(
+  /// {taskId, workspacePath})`). Unlike archive, deleted tasks are removed
+  /// from the desktop's task store for good; the desktop fires a
+  /// task_deleted event and cancels the task first if it is running.
+  Future<Map<String, Object?>> deleteTask(String taskId) async {
+    final raw = await _channel.client.channel('zcode-task').call('deleteTask', {
+      'workspacePath': workspaceKey,
+      'taskId': taskId,
+    });
+    return raw is Map<String, Object?> ? raw : const {};
+  }
+
   /// Switches the session's model (and optionally its thought level) directly
   /// on the runtime — no baseRevision needed, unlike the switchModelConfig
   /// conversation command.

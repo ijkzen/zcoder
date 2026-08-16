@@ -50,11 +50,67 @@ List<ProjectGroup> groupProjects(List<Workspace> tasks) {
   return groups;
 }
 
+/// The task ids a project delete must remove: every task under the workspace
+/// key, archived included (they still ride the workspace-list payload even
+/// though the list only renders the live ones).
+List<String> projectDeleteTaskIds(
+        List<Workspace> workspaces, String workspaceKey) =>
+    [
+      for (final w in workspaces)
+        if (w.workspaceKey == workspaceKey && w.taskId != null) w.taskId!,
+    ];
+
+/// Confirm dialog for deleting a project. [taskCount] is every task under the
+/// workspace (archived included); [visibleCount] is what the tile shows. When
+/// they differ, the dialog calls out that archived tasks go too.
+Future<bool> confirmDeleteProject(
+  BuildContext context, {
+  required String label,
+  required int taskCount,
+  required int visibleCount,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('删除项目'),
+      content: Text(
+        '确定要删除「$label」吗？\n将删除该项目下的 $taskCount 个会话'
+        '${taskCount == visibleCount ? '' : '（含已归档）'}，删除后不可恢复。',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+          ),
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('删除'),
+        ),
+      ],
+    ),
+  );
+  return confirmed == true;
+}
+
 /// Screen 2: projects (workspaces) open on the connected desktop device.
 /// Tapping one opens the bridge to it and pushes that project's session list.
-class WorkspacesPage extends StatelessWidget {
+/// Long-pressing one offers to delete the project (all its tasks).
+class WorkspacesPage extends StatefulWidget {
   final AppController app;
   const WorkspacesPage({super.key, required this.app});
+
+  @override
+  State<WorkspacesPage> createState() => _WorkspacesPageState();
+}
+
+class _WorkspacesPageState extends State<WorkspacesPage> {
+  AppController get app => widget.app;
+
+  bool _deleting = false;
 
   Future<void> _open(BuildContext context, ProjectGroup project) async {
     await app.selectWorkspace(project.representative);
@@ -69,6 +125,36 @@ class WorkspacesPage extends StatelessWidget {
       builder: (_) =>
           SessionsPage(app: app, workspace: project.representative),
     ));
+  }
+
+  Future<void> _deleteProject(ProjectGroup project) async {
+    if (_deleting) return;
+    final taskIds =
+        projectDeleteTaskIds(app.workspaces, project.workspaceKey);
+    final confirmed = await confirmDeleteProject(
+      context,
+      label: project.label,
+      taskCount: taskIds.length,
+      visibleCount: project.sessions.length,
+    );
+    if (!confirmed) return;
+    setState(() => _deleting = true);
+    try {
+      final failed = await app.deleteProject(project.workspaceKey);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(failed == 0
+            ? '已删除「${project.label}」'
+            : '删除完成：$failed 个会话删除失败'),
+      ));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('删除项目失败：$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
   }
 
   @override
@@ -87,6 +173,12 @@ class WorkspacesPage extends StatelessWidget {
             },
           ),
         ],
+        bottom: _deleting
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(4),
+                child: LinearProgressIndicator(minHeight: 4),
+              )
+            : null,
       ),
       body: ListenableBuilder(
         listenable: app,
@@ -127,59 +219,64 @@ class WorkspacesPage extends StatelessWidget {
               ),
             );
           }
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: projects.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (context, i) {
-              final project = projects[i];
-              final running = project.runningCount;
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: projectAvatarColor(project.label),
-                    child: Text(
-                      projectAvatarLetter(project.label),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+          return AbsorbPointer(
+            absorbing: _deleting,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: projects.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (context, i) {
+                final project = projects[i];
+                final running = project.runningCount;
+                return Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: projectAvatarColor(project.label),
+                      child: Text(
+                        projectAvatarLetter(project.label),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                  title: Text(
-                    project.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    '${project.sessions.length} 个会话 · ${project.path}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (running > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: Chip(
-                            label: Text('$running 运行中'),
-                            labelStyle: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(color: scheme.onPrimaryContainer),
-                            backgroundColor: scheme.primaryContainer,
-                            side: BorderSide.none,
-                            visualDensity: VisualDensity.compact,
+                    title: Text(
+                      project.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      '${project.sessions.length} 个会话 · ${project.path}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (running > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Chip(
+                              label: Text('$running 运行中'),
+                              labelStyle: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                      color: scheme.onPrimaryContainer),
+                              backgroundColor: scheme.primaryContainer,
+                              side: BorderSide.none,
+                              visualDensity: VisualDensity.compact,
+                            ),
                           ),
-                        ),
-                      const Icon(Icons.chevron_right),
-                    ],
+                        const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                    onTap: () => _open(context, project),
+                    onLongPress: _deleting ? null : () => _deleteProject(project),
                   ),
-                  onTap: () => _open(context, project),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
