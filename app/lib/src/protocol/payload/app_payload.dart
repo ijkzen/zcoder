@@ -20,10 +20,10 @@ class BridgeIdentity {
   });
 
   Map<String, Object?> toJson() => {
-        'bridgeSessionId': bridgeSessionId,
-        if (bridgeGeneration != null) 'bridgeGeneration': bridgeGeneration,
-        if (recoveryId != null) 'recoveryId': recoveryId,
-      };
+    'bridgeSessionId': bridgeSessionId,
+    if (bridgeGeneration != null) 'bridgeGeneration': bridgeGeneration,
+    if (recoveryId != null) 'recoveryId': recoveryId,
+  };
 
   /// Frames match only when every present identity field is equal (missing
   /// optional fields match anything, mirroring the desktop's
@@ -108,7 +108,9 @@ class WorkspaceListData {
     // in `tasks` (each task names its workspace). Tolerate shapes that only
     // carry one of them.
     final workspaces = (result['workspaces'] is List)
-        ? (result['workspaces'] as List).whereType<Map<String, Object?>>().toList()
+        ? (result['workspaces'] as List)
+              .whereType<Map<String, Object?>>()
+              .toList()
         : <Map<String, Object?>>[];
     final tasks = (result['tasks'] is List)
         ? (result['tasks'] as List).whereType<Map<String, Object?>>().toList()
@@ -171,7 +173,11 @@ class WorkspaceReconnectResponse extends AppPayload {
   final bool success;
   final String? error;
   const WorkspaceReconnectResponse(
-      this.requestId, this.workspaceKey, this.success, this.error);
+    this.requestId,
+    this.workspaceKey,
+    this.success,
+    this.error,
+  );
   @override
   String get zcodeType => 'workspace-reconnect-response';
 }
@@ -182,14 +188,21 @@ class PlatformResponse extends AppPayload {
   final bool success;
   final Object? result;
   final String? error;
-  const PlatformResponse(this.requestId, this.method, this.success, this.result, this.error);
+  const PlatformResponse(
+    this.requestId,
+    this.method,
+    this.success,
+    this.result,
+    this.error,
+  );
   @override
   String get zcodeType => 'platform-response';
 }
 
 class BridgeDegraded extends AppPayload {
   final BridgeIdentity identity;
-  final String reason; // rpc-transport-fault | rpc-frame-gap | buffer-overflow | buffer-timeout
+  final String
+  reason; // rpc-transport-fault | rpc-frame-gap | buffer-overflow | buffer-timeout
   const BridgeDegraded(this.identity, this.reason);
   @override
   String get zcodeType => 'bridge-degraded';
@@ -250,7 +263,9 @@ AppPayload? parseAppPayload(Map<String, Object?> json) {
       );
     case 'workspace-bridge-error':
       return WorkspaceBridgeError(
-        requestId: json['requestId'] is String ? json['requestId'] as String : null,
+        requestId: json['requestId'] is String
+            ? json['requestId'] as String
+            : null,
         reason: _str(json['reason']),
         error: _str(json['error']),
         identity: _identity(json),
@@ -291,50 +306,51 @@ AppPayload? parseAppPayload(Map<String, Object?> json) {
 
 // ---------- Terminal→device request builders ----------
 
-Map<String, Object?> bootstrapRequest(String requestId) =>
-    {'zcode_type': 'bootstrap-request', 'requestId': requestId};
+Map<String, Object?> bootstrapRequest(String requestId) => {
+  'zcode_type': 'bootstrap-request',
+  'requestId': requestId,
+};
 
-Map<String, Object?> workspaceListRequest(String requestId) =>
-    {'zcode_type': 'workspace-list-request', 'requestId': requestId};
+Map<String, Object?> workspaceListRequest(String requestId) => {
+  'zcode_type': 'workspace-list-request',
+  'requestId': requestId,
+};
 
 Map<String, Object?> workspaceBridgeOpen({
   required String requestId,
   required BridgeIdentity identity,
   required String workspaceKey,
   String? taskId,
-}) =>
-    {
-      'zcode_type': 'workspace-bridge-open',
-      'requestId': requestId,
-      ...identity.toJson(),
-      'workspaceKey': workspaceKey,
-      if (taskId != null) 'taskId': taskId,
-    };
+}) => {
+  'zcode_type': 'workspace-bridge-open',
+  'requestId': requestId,
+  ...identity.toJson(),
+  'workspaceKey': workspaceKey,
+  'taskId': ?taskId,
+};
 
 Map<String, Object?> workspaceReconnectRequest({
   required String requestId,
   required String workspaceKey,
-}) =>
-    {
-      'zcode_type': 'workspace-reconnect-request',
-      'requestId': requestId,
-      'workspaceKey': workspaceKey,
-    };
+}) => {
+  'zcode_type': 'workspace-reconnect-request',
+  'requestId': requestId,
+  'workspaceKey': workspaceKey,
+};
 
 Map<String, Object?> mobileViewStateUpdate({
   String? activeWorkspaceKey,
   String? activeTaskId,
   required Map<String, Object?> deviceInfo,
-}) =>
-    {
-      'zcode_type': 'mobile-view-state-update',
-      'viewState': {
-        if (activeWorkspaceKey != null) 'activeWorkspaceKey': activeWorkspaceKey,
-        if (activeTaskId != null) 'activeTaskId': activeTaskId,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      },
-      'deviceInfo': deviceInfo,
-    };
+}) => {
+  'zcode_type': 'mobile-view-state-update',
+  'viewState': {
+    'activeWorkspaceKey': ?activeWorkspaceKey,
+    'activeTaskId': ?activeTaskId,
+    'updatedAt': DateTime.now().millisecondsSinceEpoch,
+  },
+  'deviceInfo': deviceInfo,
+};
 
 /// `deviceInfo` shape per the desktop's schema: platform/version/name plus
 /// optional browser-ish fields and a REQUIRED `updatedAt`.
@@ -344,15 +360,14 @@ Map<String, Object?> mobileDeviceInfo({
   required String name,
   String? language,
   bool? online,
-}) =>
-    {
-      'platform': platform,
-      'version': version,
-      'name': name,
-      if (language != null) 'language': language,
-      if (online != null) 'online': online,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch,
-    };
+}) => {
+  'platform': platform,
+  'version': version,
+  'name': name,
+  'language': ?language,
+  'online': ?online,
+  'updatedAt': DateTime.now().millisecondsSinceEpoch,
+};
 
 /// Terminal-side diagnostic report the device logs for support
 /// (`event` ∈ state-transition | socket-close | socket-error |
@@ -369,31 +384,29 @@ Map<String, Object?> mobileDiagnostic({
   String? failureReason,
   String? failureMessage,
   bool? online,
-}) =>
-    {
-      'zcode_type': 'mobile-diagnostic',
-      'event': event,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      if (state != null) 'state': state,
-      if (previousState != null) 'previousState': previousState,
-      if (pairStatus != null) 'pairStatus': pairStatus,
-      if (closeCode != null) 'closeCode': closeCode,
-      if (closeReason != null) 'closeReason': closeReason,
-      if (wasClean != null) 'wasClean': wasClean,
-      if (wasPaired != null) 'wasPaired': wasPaired,
-      if (failureReason != null) 'failureReason': failureReason,
-      if (failureMessage != null) 'failureMessage': failureMessage,
-      if (online != null) 'online': online,
-    };
+}) => {
+  'zcode_type': 'mobile-diagnostic',
+  'event': event,
+  'timestamp': DateTime.now().millisecondsSinceEpoch,
+  'state': ?state,
+  'previousState': ?previousState,
+  'pairStatus': ?pairStatus,
+  'closeCode': ?closeCode,
+  'closeReason': ?closeReason,
+  'wasClean': ?wasClean,
+  'wasPaired': ?wasPaired,
+  'failureReason': ?failureReason,
+  'failureMessage': ?failureMessage,
+  'online': ?online,
+};
 
 Map<String, Object?> platformRequest({
   required String requestId,
   required String method,
   Object? args,
-}) =>
-    {
-      'zcode_type': 'platform-request',
-      'requestId': requestId,
-      'method': method,
-      if (args != null) 'args': args,
-    };
+}) => {
+  'zcode_type': 'platform-request',
+  'requestId': requestId,
+  'method': method,
+  'args': ?args,
+};

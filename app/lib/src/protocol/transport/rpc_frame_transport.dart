@@ -9,7 +9,6 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -48,7 +47,7 @@ class _OutboundMessage {
   int nextFrameIndex = 0;
 
   _OutboundMessage(this.messageSeq, this.frames, this.queuedAt)
-      : outerBytes = frames.fold(0, (sum, f) => sum + jsonEncode(f).length);
+    : outerBytes = frames.fold(0, (sum, f) => sum + jsonEncode(f).length);
 }
 
 /// One side of an acknowledged bridge.
@@ -111,20 +110,24 @@ class RpcFrameTransport {
   void sendMessage(Uint8List message) {
     if (_degraded) return;
     if (message.isEmpty || message.length > ProtocolLimits.maxMessageBytes) {
-      throw RpcTransportException(message.isEmpty
-          ? RpcFrameFault.encodingFailed
-          : RpcFrameFault.envelopeTooLarge);
+      throw RpcTransportException(
+        message.isEmpty
+            ? RpcFrameFault.encodingFailed
+            : RpcFrameFault.envelopeTooLarge,
+      );
     }
     final messageSeq = ++_messageSeq;
     final fragmentCount =
         (message.length + ProtocolLimits.fragmentPayloadBytes - 1) ~/
-            ProtocolLimits.fragmentPayloadBytes;
+        ProtocolLimits.fragmentPayloadBytes;
     final checksum = crc32Hex(message);
     final frames = <Map<String, Object?>>[];
     for (var i = 0; i < fragmentCount; i++) {
       final start = i * ProtocolLimits.fragmentPayloadBytes;
-      final end = (start + ProtocolLimits.fragmentPayloadBytes)
-          .clamp(0, message.length);
+      final end = (start + ProtocolLimits.fragmentPayloadBytes).clamp(
+        0,
+        message.length,
+      );
       final chunk = Uint8List.sublistView(message, start, end);
       frames.add({
         'zcode_type': 'rpc-frame',
@@ -139,15 +142,18 @@ class RpcFrameTransport {
       });
     }
     final entry = _OutboundMessage(messageSeq, frames, _now());
-    if (_unackedBytes + entry.outerBytes > ProtocolLimits.replayBufferMaxBytes) {
+    if (_unackedBytes + entry.outerBytes >
+        ProtocolLimits.replayBufferMaxBytes) {
       _degrade(RpcFrameFault.replayBufferExceeded);
       return;
     }
     _outbound.add(entry);
     _unackedBytes += entry.outerBytes;
     _startGraceTimer();
-    zlog('sending rpc message seq=$messageSeq '
-        'bytes=${message.length} frags=$fragmentCount');
+    zlog(
+      'sending rpc message seq=$messageSeq '
+      'bytes=${message.length} frags=$fragmentCount',
+    );
     _flushOutbound();
   }
 
@@ -206,15 +212,18 @@ class RpcFrameTransport {
     if (ackMessageSeq <= _lastAckedMessageSeq) return;
     _lastAckedMessageSeq = ackMessageSeq;
     var released = 0;
-    while (_outbound.isNotEmpty && _outbound.first.messageSeq <= ackMessageSeq) {
+    while (_outbound.isNotEmpty &&
+        _outbound.first.messageSeq <= ackMessageSeq) {
       released += _outbound.first.outerBytes;
       _outbound.removeAt(0);
       if (_nextUnsentIndex > 0) _nextUnsentIndex--;
     }
     _unackedBytes = (_unackedBytes - released).clamp(0, 1 << 62);
     if (_outbound.isEmpty) _stopGraceTimer();
-    zlog('desktop acked through msg=$ackMessageSeq, '
-        'unacked=$_unackedBytes bytes, ${_outbound.length} messages');
+    zlog(
+      'desktop acked through msg=$ackMessageSeq, '
+      'unacked=$_unackedBytes bytes, ${_outbound.length} messages',
+    );
   }
 
   void _acceptFrame(Map<String, Object?> frame) {
@@ -223,7 +232,9 @@ class RpcFrameTransport {
     final fragmentIndex = frame['fragmentIndex'];
     final fragmentCount = frame['fragmentCount'];
     final dataBase64 = frame['dataBase64'];
-    if (fragmentIndex is! int || fragmentCount is! int || dataBase64 is! String) {
+    if (fragmentIndex is! int ||
+        fragmentCount is! int ||
+        dataBase64 is! String) {
       _degrade(RpcFrameFault.invalidPayload);
       return;
     }

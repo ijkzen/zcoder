@@ -141,7 +141,7 @@ class _FragmentAssembly {
   int receivedCount = 0;
 
   _FragmentAssembly(int count, this.createdAt)
-      : fragments = List.filled(count, null);
+    : fragments = List.filled(count, null);
 }
 
 /// Utility shared by both callers: verifies the declared whole-message CRC32.

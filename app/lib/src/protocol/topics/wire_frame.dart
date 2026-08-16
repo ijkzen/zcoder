@@ -56,9 +56,11 @@ class WireFrameAssembler {
       final frame = event['frame'];
       if (frame is Map<String, Object?>) {
         final payload = frame['payload'];
-        zlog('topic wire frame complete: topic=${frame['topic']} '
-            'kind=${payload is Map ? payload['kind'] : '?'} '
-            'toSeq=${frame['toSeq']} delivery=${event['deliveryKind']}');
+        zlog(
+          'topic wire frame complete: topic=${frame['topic']} '
+          'kind=${payload is Map ? payload['kind'] : '?'} '
+          'toSeq=${frame['toSeq']} delivery=${event['deliveryKind']}',
+        );
         return WireFrameResult(
           frame: frame,
           deliveryKind: event['deliveryKind'] is String
@@ -169,10 +171,11 @@ class TopicFrame {
   bool get isSnapshot => payload['kind'] == 'snapshot';
   Map<String, Object?>? get snapshot =>
       isSnapshot && payload['snapshot'] is Map<String, Object?>
-          ? payload['snapshot'] as Map<String, Object?>
-          : null;
-  List<Object?>? get deltas =>
-      !isSnapshot && payload['deltas'] is List ? payload['deltas'] as List : null;
+      ? payload['snapshot'] as Map<String, Object?>
+      : null;
+  List<Object?>? get deltas => !isSnapshot && payload['deltas'] is List
+      ? payload['deltas'] as List
+      : null;
 
   /// [deliveryKind] comes from the wire-frame envelope, not the inner frame.
   static TopicFrame? fromMap(Map<String, Object?> map, {String? deliveryKind}) {

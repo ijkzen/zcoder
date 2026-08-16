@@ -16,9 +16,9 @@ class WorkspaceTarget {
   const WorkspaceTarget({required this.workspacePath, this.workspaceIdentity});
 
   Map<String, Object?> toJson() => {
-        'workspacePath': workspacePath,
-        if (workspaceIdentity != null) 'workspaceIdentity': workspaceIdentity,
-      };
+    'workspacePath': workspacePath,
+    if (workspaceIdentity != null) 'workspaceIdentity': workspaceIdentity,
+  };
 }
 
 /// Shared plumbing for service wrappers: every call takes the workspace
@@ -29,7 +29,10 @@ abstract class WorkspaceService {
 
   WorkspaceService(this._channel, this.target);
 
-  Future<Map<String, Object?>> _call(String method, Map<String, Object?> args) async {
+  Future<Map<String, Object?>> _call(
+    String method,
+    Map<String, Object?> args,
+  ) async {
     final raw = await _channel.call(method, {...target.toJson(), ...args});
     return raw is Map<String, Object?> ? raw : const {};
   }
@@ -37,8 +40,7 @@ abstract class WorkspaceService {
 
 /// `zcode-task` — the terminal-facing task facade.
 class ZcodeTaskService extends WorkspaceService {
-  ZcodeTaskService(RpcChannel channel, WorkspaceTarget target)
-      : super(channel, target);
+  ZcodeTaskService(super.channel, super.target);
 
   /// `prepareWorkspace` — the workspace's config options (provider/model/
   /// thought/collaboration/followup selects) and slash commands (builtin +
@@ -72,22 +74,22 @@ class ZcodeTaskService extends WorkspaceService {
     String taskId, {
     required bool unread,
     int? expectedUnreadAt,
-  }) =>
-      _call('setTaskUnread', {
-        'taskId': taskId,
-        'unread': unread,
-        if (expectedUnreadAt != null) 'expectedUnreadAt': expectedUnreadAt,
-      });
+  }) => _call('setTaskUnread', {
+    'taskId': taskId,
+    'unread': unread,
+    'expectedUnreadAt': ?expectedUnreadAt,
+  });
 
   /// Pins / unpins a task.
-  Future<Map<String, Object?>> setTaskPinned(String taskId, {required bool pinned}) =>
-      _call('setTaskPinned', {'taskId': taskId, 'pinned': pinned});
+  Future<Map<String, Object?>> setTaskPinned(
+    String taskId, {
+    required bool pinned,
+  }) => _call('setTaskPinned', {'taskId': taskId, 'pinned': pinned});
 }
 
 /// `zcode-session` — session-level reads and settings.
 class ZcodeSessionService extends WorkspaceService {
-  ZcodeSessionService(RpcChannel channel, WorkspaceTarget target)
-      : super(channel, target);
+  ZcodeSessionService(super.channel, super.target);
 
   /// Snapshot of one session: `{session:{status, …}, settings:{model,
   /// thoughtLevel}, runtime:{contextUsage}, projection:{pendingPermissions},
@@ -96,12 +98,11 @@ class ZcodeSessionService extends WorkspaceService {
     String sessionId, {
     int? messageLimit,
     int? afterSeq,
-  }) =>
-      _call('readSession', {
-        'sessionId': sessionId,
-        if (messageLimit != null) 'messageLimit': messageLimit,
-        if (afterSeq != null) 'afterSeq': afterSeq,
-      });
+  }) => _call('readSession', {
+    'sessionId': sessionId,
+    'messageLimit': ?messageLimit,
+    'afterSeq': ?afterSeq,
+  });
 
   /// Switches the session's model (and optionally thought level) directly on
   /// the runtime — no baseRevision needed, unlike the switchModelConfig
@@ -111,19 +112,24 @@ class ZcodeSessionService extends WorkspaceService {
     required String provider,
     required String model,
     String? thoughtLevel,
-  }) =>
-      _call('setModel', {
-        'sessionId': sessionId,
-        'model': '$provider/$model',
-        if (thoughtLevel != null) 'thoughtLevel': thoughtLevel,
-      });
+  }) => _call('setModel', {
+    'sessionId': sessionId,
+    'model': '$provider/$model',
+    'thoughtLevel': ?thoughtLevel,
+  });
 
   /// Switches the session's thought level (reasoning effort).
-  Future<Map<String, Object?>> setThoughtLevel(String sessionId, String thoughtLevel) =>
-      _call('setThoughtLevel', {'sessionId': sessionId, 'thoughtLevel': thoughtLevel});
+  Future<Map<String, Object?>> setThoughtLevel(
+    String sessionId,
+    String thoughtLevel,
+  ) => _call('setThoughtLevel', {
+    'sessionId': sessionId,
+    'thoughtLevel': thoughtLevel,
+  });
 
   /// The workspace's model registry and default thought level.
-  Future<Map<String, Object?>> readWorkspaceState() => _call('readWorkspaceState', const {});
+  Future<Map<String, Object?>> readWorkspaceState() =>
+      _call('readWorkspaceState', const {});
 }
 
 /// `model-provider` channel — provider CRUD on the desktop's model registry.
@@ -139,17 +145,14 @@ class ModelProviderService {
     ];
   }
 
-  Future<Object?> save(Map<String, Object?> provider) => _channel.call(
-        'save',
-        {
-          ...provider,
-          'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        },
-      );
+  Future<Object?> save(Map<String, Object?> provider) => _channel.call('save', {
+    ...provider,
+    'updatedAt': DateTime.now().millisecondsSinceEpoch,
+  });
 
   Future<Object?> delete(String id) => _channel.call('delete', [
-        {'id': id},
-      ]);
+    {'id': id},
+  ]);
 }
 
 /// `skills` channel — enabled skills of the workspace; triggered in the
@@ -187,11 +190,11 @@ class SlashCommand {
   });
 
   factory SlashCommand.fromJson(Map<String, Object?> json) => SlashCommand(
-        name: json['name']?.toString() ?? '',
-        description: json['description']?.toString() ?? '',
-        inputHint: json['inputHint']?.toString(),
-        source: json['source']?.toString() ?? '',
-      );
+    name: json['name']?.toString() ?? '',
+    description: json['description']?.toString() ?? '',
+    inputHint: json['inputHint']?.toString(),
+    source: json['source']?.toString() ?? '',
+  );
 }
 
 /// One config option from `prepareWorkspace` (provider/model/thought/
@@ -213,16 +216,16 @@ class ConfigOption {
   });
 
   factory ConfigOption.fromJson(Map<String, Object?> json) => ConfigOption(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        category: json['category']?.toString() ?? '',
-        type: json['type']?.toString() ?? '',
-        currentValue: json['currentValue'],
-        options: [
-          for (final o in (json['options'] as List? ?? const []))
-            if (o is Map) ConfigOptionValue.fromJson(o.cast<String, dynamic>()),
-        ],
-      );
+    id: json['id']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    category: json['category']?.toString() ?? '',
+    type: json['type']?.toString() ?? '',
+    currentValue: json['currentValue'],
+    options: [
+      for (final o in (json['options'] as List? ?? const []))
+        if (o is Map) ConfigOptionValue.fromJson(o.cast<String, dynamic>()),
+    ],
+  );
 }
 
 class ConfigOptionValue {
@@ -250,18 +253,21 @@ class ConfigOptionValue {
 class WorkspacePrep {
   final List<ConfigOption> configOptions;
   final List<SlashCommand> slashCommands;
-  const WorkspacePrep({required this.configOptions, required this.slashCommands});
+  const WorkspacePrep({
+    required this.configOptions,
+    required this.slashCommands,
+  });
 
   factory WorkspacePrep.fromJson(Map<String, Object?> json) => WorkspacePrep(
-        configOptions: [
-          for (final o in (json['configOptions'] as List? ?? const []))
-            if (o is Map) ConfigOption.fromJson(o.cast<String, dynamic>()),
-        ],
-        slashCommands: [
-          for (final c in (json['slashCommands'] as List? ?? const []))
-            if (c is Map) SlashCommand.fromJson(c.cast<String, dynamic>()),
-        ],
-      );
+    configOptions: [
+      for (final o in (json['configOptions'] as List? ?? const []))
+        if (o is Map) ConfigOption.fromJson(o.cast<String, dynamic>()),
+    ],
+    slashCommands: [
+      for (final c in (json['slashCommands'] as List? ?? const []))
+        if (c is Map) SlashCommand.fromJson(c.cast<String, dynamic>()),
+    ],
+  );
 
   ConfigOption? option(String id) {
     for (final o in configOptions) {
@@ -291,12 +297,12 @@ class SkillEntry {
   });
 
   factory SkillEntry.fromJson(Map<String, Object?> json) => SkillEntry(
-        id: json['id']?.toString() ?? '',
-        name: json['name']?.toString() ?? '',
-        path: json['path']?.toString() ?? '',
-        scope: json['scope']?.toString() ?? 'workspace',
-        description: json['description']?.toString(),
-        argumentHint: json['argumentHint']?.toString(),
-        enabled: json['enabled'] != false,
-      );
+    id: json['id']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    path: json['path']?.toString() ?? '',
+    scope: json['scope']?.toString() ?? 'workspace',
+    description: json['description']?.toString(),
+    argumentHint: json['argumentHint']?.toString(),
+    enabled: json['enabled'] != false,
+  );
 }

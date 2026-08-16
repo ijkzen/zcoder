@@ -33,39 +33,39 @@ class StoredPairing {
   });
 
   PairingCredential toCredential() => PairingCredential(
-        deviceSid: deviceSid,
-        passHash: passHash,
-        timestamp: timestamp,
-        deviceMid: deviceMid,
-        deviceName: deviceName,
-        appVersion: appVersion,
-      );
+    deviceSid: deviceSid,
+    passHash: passHash,
+    timestamp: timestamp,
+    deviceMid: deviceMid,
+    deviceName: deviceName,
+    appVersion: appVersion,
+  );
 
   String get displayName =>
       customName.isNotEmpty ? customName : (deviceName ?? deviceSid);
 
   Map<String, Object?> toRow() => {
-        'device_sid': deviceSid,
-        'pass_hash': passHash,
-        'timestamp': timestamp,
-        'device_mid': deviceMid,
-        'device_name': deviceName,
-        'app_version': appVersion,
-        'custom_name': customName,
-        'created_at': createdAt,
-      };
+    'device_sid': deviceSid,
+    'pass_hash': passHash,
+    'timestamp': timestamp,
+    'device_mid': deviceMid,
+    'device_name': deviceName,
+    'app_version': appVersion,
+    'custom_name': customName,
+    'created_at': createdAt,
+  };
 
   static StoredPairing fromRow(Map<String, Object?> row) => StoredPairing(
-        id: row['id'] as int,
-        deviceSid: row['device_sid'] as String,
-        passHash: row['pass_hash'] as String,
-        timestamp: row['timestamp'] as int,
-        deviceMid: row['device_mid'] as String?,
-        deviceName: row['device_name'] as String?,
-        appVersion: row['app_version'] as String?,
-        customName: row['custom_name'] as String? ?? '',
-        createdAt: row['created_at'] as int? ?? 0,
-      );
+    id: row['id'] as int,
+    deviceSid: row['device_sid'] as String,
+    passHash: row['pass_hash'] as String,
+    timestamp: row['timestamp'] as int,
+    deviceMid: row['device_mid'] as String?,
+    deviceName: row['device_name'] as String?,
+    appVersion: row['app_version'] as String?,
+    customName: row['custom_name'] as String? ?? '',
+    createdAt: row['created_at'] as int? ?? 0,
+  );
 }
 
 class CachedSession {
@@ -177,7 +177,11 @@ class AppDatabase {
 
   Future<StoredPairing?> findPairing(String deviceSid) async {
     final db = await _database;
-    final rows = await db.query('pairings', where: 'device_sid = ?', whereArgs: [deviceSid]);
+    final rows = await db.query(
+      'pairings',
+      where: 'device_sid = ?',
+      whereArgs: [deviceSid],
+    );
     if (rows.isEmpty) return null;
     return StoredPairing.fromRow(rows.first);
   }
@@ -203,7 +207,12 @@ class AppDatabase {
 
   Future<void> renamePairing(int id, String customName) async {
     final db = await _database;
-    await db.update('pairings', {'custom_name': customName}, where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'pairings',
+      {'custom_name': customName},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> deletePairing(int id) async {
@@ -213,7 +222,9 @@ class AppDatabase {
 
   // ---------- Workspace model preferences ----------
 
-  Future<WorkspaceModelPrefs?> getWorkspaceModelPrefs(String workspaceKey) async {
+  Future<WorkspaceModelPrefs?> getWorkspaceModelPrefs(
+    String workspaceKey,
+  ) async {
     final db = await _database;
     final rows = await db.query(
       'workspace_model_prefs',
@@ -230,18 +241,32 @@ class AppDatabase {
     );
   }
 
+  /// Every stored workspace model preference — used by provider management to
+  /// find drafts referencing a provider (in-use delete guard / disable
+  /// fallback).
+  Future<List<WorkspaceModelPrefs>> listWorkspaceModelPrefs() async {
+    final db = await _database;
+    final rows = await db.query('workspace_model_prefs');
+    return rows
+        .map(
+          (r) => WorkspaceModelPrefs(
+            workspaceKey: r['workspace_key'] as String,
+            provider: r['provider'] as String?,
+            model: r['model'] as String?,
+            thoughtLevel: r['thought_level'] as String?,
+          ),
+        )
+        .toList();
+  }
+
   Future<void> saveWorkspaceModelPrefs(WorkspaceModelPrefs prefs) async {
     final db = await _database;
-    await db.insert(
-      'workspace_model_prefs',
-      {
-        'workspace_key': prefs.workspaceKey,
-        'provider': prefs.provider,
-        'model': prefs.model,
-        'thought_level': prefs.thoughtLevel,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('workspace_model_prefs', {
+      'workspace_key': prefs.workspaceKey,
+      'provider': prefs.provider,
+      'model': prefs.model,
+      'thought_level': prefs.thoughtLevel,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> clearWorkspaceModelPrefs(String workspaceKey) async {
@@ -263,17 +288,13 @@ class AppDatabase {
     String previewText,
   ) async {
     final db = await _database;
-    await db.insert(
-      'cached_sessions',
-      {
-        'session_id': sessionId,
-        'workspace_key': workspaceKey,
-        'title': title,
-        'last_activity_at': lastActivityAt,
-        'preview_text': previewText,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('cached_sessions', {
+      'session_id': sessionId,
+      'workspace_key': workspaceKey,
+      'title': title,
+      'last_activity_at': lastActivityAt,
+      'preview_text': previewText,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<CachedSession>> cachedSessions(String workspaceKey) async {
@@ -286,23 +307,25 @@ class AppDatabase {
       limit: 50,
     );
     return rows
-        .map((r) => CachedSession(
-              sessionId: r['session_id'] as String,
-              workspaceKey: r['workspace_key'] as String,
-              title: r['title'] as String? ?? '',
-              lastActivityAt: r['last_activity_at'] as int? ?? 0,
-              previewText: r['preview_text'] as String? ?? '',
-            ))
+        .map(
+          (r) => CachedSession(
+            sessionId: r['session_id'] as String,
+            workspaceKey: r['workspace_key'] as String,
+            title: r['title'] as String? ?? '',
+            lastActivityAt: r['last_activity_at'] as int? ?? 0,
+            previewText: r['preview_text'] as String? ?? '',
+          ),
+        )
         .toList();
   }
 
   Future<void> cacheRow(String sessionId, int rowId, String rowJson) async {
     final db = await _database;
-    await db.insert(
-      'cached_rows',
-      {'session_id': sessionId, 'row_id': rowId, 'row_json': rowJson},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('cached_rows', {
+      'session_id': sessionId,
+      'row_id': rowId,
+      'row_json': rowJson,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<String>> cachedRowJson(String sessionId) async {
@@ -318,7 +341,11 @@ class AppDatabase {
 
   Future<void> clearSessionRows(String sessionId) async {
     final db = await _database;
-    await db.delete('cached_rows', where: 'session_id = ?', whereArgs: [sessionId]);
+    await db.delete(
+      'cached_rows',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
   }
 
   /// Trim cached rows for [sessionId] to at most [keep] newest rows.
@@ -359,12 +386,11 @@ String rowCacheJson({
   String? inputText,
   String? toolName,
   String? toolStatus,
-}) =>
-    jsonEncode({
-      'rowId': rowId,
-      'kind': kind,
-      if (text != null) 'text': text,
-      if (inputText != null) 'inputText': inputText,
-      if (toolName != null) 'toolName': toolName,
-      if (toolStatus != null) 'toolStatus': toolStatus,
-    });
+}) => jsonEncode({
+  'rowId': rowId,
+  'kind': kind,
+  'text': ?text,
+  'inputText': ?inputText,
+  'toolName': ?toolName,
+  'toolStatus': ?toolStatus,
+});

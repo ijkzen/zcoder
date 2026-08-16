@@ -11,10 +11,8 @@ import '../protocol/zlog.dart';
 import 'dart:async';
 import 'dart:collection';
 
-
 import '../bridge/bridge_manager.dart';
 import '../protocol/protocol.dart';
-import '../protocol/topics/topic_models.dart';
 
 class ConversationState {
   final String sessionId;
@@ -52,12 +50,12 @@ class ConversationState {
     SessionModelConfig? modelConfig,
     this.tokenUsage,
     this.sessionStatus = '',
-  })  : control = control ?? const {},
-        pendingInteractions = pendingInteractions ?? const [],
-        pendingRequests = pendingRequests ?? const [],
-        contextUsage = contextUsage ?? const ContextUsage(),
-        modelConfig = modelConfig ?? const SessionModelConfig(),
-        rows = SplayTreeMap<int, ConversationRow>();
+  }) : control = control ?? const {},
+       pendingInteractions = pendingInteractions ?? const [],
+       pendingRequests = pendingRequests ?? const [],
+       contextUsage = contextUsage ?? const ContextUsage(),
+       modelConfig = modelConfig ?? const SessionModelConfig(),
+       rows = SplayTreeMap<int, ConversationRow>();
 
   List<ConversationRow> get orderedRows => rows.values.toList();
 
@@ -278,7 +276,9 @@ class ConversationController {
     if (frame.topic != 'conversation/$sessionId') return;
     final snapshot = frame.snapshot;
     if (snapshot != null) {
-      if (_hasBase && frame.deliveryKind == 'online' && frame.toSeq <= _topicSeq) {
+      if (_hasBase &&
+          frame.deliveryKind == 'online' &&
+          frame.toSeq <= _topicSeq) {
         return; // stale replay
       }
       _topicSeqEpoch = snapshot['logEpoch'] is String
@@ -286,7 +286,10 @@ class ConversationController {
           : _topicSeqEpoch;
       _topicSeq = frame.toSeq;
       _hasBase = true;
-      final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+      final state = _state ??= ConversationState(
+        sessionId: sessionId,
+        logEpoch: '',
+      );
       state.applySnapshot(ConversationSnapshot.fromJson(snapshot));
       _emit();
       return;
@@ -328,7 +331,10 @@ class ConversationController {
     if (service == null) return;
     try {
       final result = await service.readSession(sessionId, messageLimit: 1);
-      final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+      final state = _state ??= ConversationState(
+        sessionId: sessionId,
+        logEpoch: '',
+      );
       state.applyReadSession(result);
       final settings = result['settings'];
       if (settings is Map<String, Object?>) {
@@ -394,7 +400,10 @@ class ConversationController {
       final result = await channel.rowsRange(sessionId, limit: limit);
       final rows = result['rows'];
       if (rows is! List) return;
-      final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+      final state = _state ??= ConversationState(
+        sessionId: sessionId,
+        logEpoch: '',
+      );
       final atLogEpoch = result['atLogEpoch'];
       if (atLogEpoch is String && atLogEpoch.isNotEmpty) {
         state.logEpoch = atLogEpoch;
@@ -420,11 +429,18 @@ class ConversationController {
       for (final r in rows.whereType<Map<String, Object?>>()) {
         final row = ConversationRow.fromJson(r);
         parsed.add(row);
-        minFetched = minFetched == null || row.rowId < minFetched ? row.rowId : minFetched;
-        maxFetched = maxFetched == null || row.rowId > maxFetched ? row.rowId : maxFetched;
+        minFetched = minFetched == null || row.rowId < minFetched
+            ? row.rowId
+            : minFetched;
+        maxFetched = maxFetched == null || row.rowId > maxFetched
+            ? row.rowId
+            : maxFetched;
       }
       final knownMax = state.rows.isEmpty ? null : state.rows.lastKey();
-      if (parsed.isNotEmpty && knownMax != null && minFetched! > knownMax + 1 && limit < 200) {
+      if (parsed.isNotEmpty &&
+          knownMax != null &&
+          minFetched! > knownMax + 1 &&
+          limit < 200) {
         // Gap: more rows appeared than the tail window covers.
         await pollLatest(limit: 200);
         return;
@@ -444,7 +460,10 @@ class ConversationController {
   /// Seeds rows from the offline cache before the live snapshot arrives, so
   /// the user sees history immediately (and while offline).
   void seedRows(List<ConversationRow> rows) {
-    final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+    final state = _state ??= ConversationState(
+      sessionId: sessionId,
+      logEpoch: '',
+    );
     for (final row in rows) {
       state.rows[row.rowId] = row;
     }

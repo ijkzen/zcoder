@@ -54,12 +54,17 @@ class NotificationService {
       onDidReceiveNotificationResponse: (response) {
         final payload = response.payload;
         if (payload != null && payload.startsWith(_approvalPrefix)) {
-          // Handled by the foreground task handler on app resume; here we
-          // just make sure the app surfaces the right session.
-          app?.pendingDeepLink = payload.substring(_approvalPrefix.length);
+          app?.requestDeepLink(payload.substring(_approvalPrefix.length));
         }
       },
     );
+    // Android 13+ runtime notification permission — asked once here; denial
+    // only silences system notifications, in-app approval chips still work.
+    await _local
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestNotificationsPermission();
 
     if (app != null) {
       app.onNotificationEvent = _handleEvent;

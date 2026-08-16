@@ -75,7 +75,7 @@ void writeU32BE(Uint8List bytes, int offset, int value) {
 
 int readU32BE(Uint8List bytes, int offset) =>
     ((bytes[offset] << 24) |
-            (bytes[offset + 1] << 16) |
-            (bytes[offset + 2] << 8) |
-            bytes[offset + 3]) &
-        0xFFFFFFFF;
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3]) &
+    0xFFFFFFFF;

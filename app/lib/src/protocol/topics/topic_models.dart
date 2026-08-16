@@ -99,7 +99,8 @@ class Workspace {
     final path = json['workspacePath'] as String? ?? '';
     final identity = json['workspaceIdentity'] as String?;
     return Workspace(
-      workspaceKey: key ?? (identity != null && identity.isNotEmpty ? identity : path),
+      workspaceKey:
+          key ?? (identity != null && identity.isNotEmpty ? identity : path),
       workspacePath: path,
       workspaceIdentity: json['workspaceIdentity'] as String?,
       workspaceLabel: json['workspaceLabel'] as String? ?? '',
@@ -154,20 +155,20 @@ class SessionSummary {
   });
 
   factory SessionSummary.fromJson(Map<String, Object?> json) => SessionSummary(
-        sessionId: json['sessionId'] as String,
-        parentSessionId: json['parentSessionId'] as String?,
-        title: json['title'] as String? ?? '',
-        titleSource: json['titleSource'] as String? ?? 'default',
-        phase: json['phase'] as String? ?? '',
-        sessionEnded: json['sessionEnded'] as bool? ?? false,
-        hasBackgroundWork: json['hasBackgroundWork'] as bool? ?? false,
-        pendingInteraction: json['pendingInteraction'] as bool? ?? false,
-        pendingInteractionSummary: json['pendingInteractionSummary'] as String?,
-        goalStatus: json['goalStatus'] as String?,
-        lastActivityAt: json['lastActivityAt'] as int?,
-        lastAssistantPreview: json['lastAssistantPreview'] as String?,
-        createdAt: json['createdAt'] as int?,
-      );
+    sessionId: json['sessionId'] as String,
+    parentSessionId: json['parentSessionId'] as String?,
+    title: json['title'] as String? ?? '',
+    titleSource: json['titleSource'] as String? ?? 'default',
+    phase: json['phase'] as String? ?? '',
+    sessionEnded: json['sessionEnded'] as bool? ?? false,
+    hasBackgroundWork: json['hasBackgroundWork'] as bool? ?? false,
+    pendingInteraction: json['pendingInteraction'] as bool? ?? false,
+    pendingInteractionSummary: json['pendingInteractionSummary'] as String?,
+    goalStatus: json['goalStatus'] as String?,
+    lastActivityAt: json['lastActivityAt'] as int?,
+    lastAssistantPreview: json['lastAssistantPreview'] as String?,
+    createdAt: json['createdAt'] as int?,
+  );
 }
 
 // ---------- Conversation rows ----------
@@ -196,7 +197,13 @@ sealed class ConversationRow {
       case 'userInput':
         return UserInputRow.fromJson(json, rowId, turnId, entityId, createdAt);
       case 'assistantText':
-        return AssistantTextRow.fromJson(json, rowId, turnId, entityId, createdAt);
+        return AssistantTextRow.fromJson(
+          json,
+          rowId,
+          turnId,
+          entityId,
+          createdAt,
+        );
       case 'reasoning':
         return ReasoningRow.fromJson(json, rowId, turnId, entityId, createdAt);
       case 'toolCall':
@@ -204,7 +211,13 @@ sealed class ConversationRow {
       case 'subagent':
         return SubagentRow.fromJson(json, rowId, turnId, entityId, createdAt);
       case 'timelineMarker':
-        return TimelineMarkerRow.fromJson(json, rowId, turnId, entityId, createdAt);
+        return TimelineMarkerRow.fromJson(
+          json,
+          rowId,
+          turnId,
+          entityId,
+          createdAt,
+        );
       default:
         return UnknownRow(
           rowId: rowId,
@@ -223,9 +236,9 @@ sealed class ConversationRow {
 
   /// Plain-text payload persisted by the offline cache (ADR-0002: text only).
   Map<String, Object?> toCacheMap() => {
-        'rowId': rowId,
-        'kind': _kindName(this),
-      };
+    'rowId': rowId,
+    'kind': _kindName(this),
+  };
 }
 
 String _kindName(ConversationRow row) {
@@ -254,17 +267,22 @@ class TurnHeaderRow extends ConversationRow {
     this.startedAt,
     required this.raw,
   });
-  factory TurnHeaderRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
-      TurnHeaderRow(
-        rowId: rowId,
-        turnId: turnId,
-        entityId: entityId,
-        createdAt: createdAt,
-        origin: json['origin']?.toString() ?? '',
-        state: json['state']?.toString() ?? '',
-        startedAt: json['startedAt'] as int?,
-        raw: json,
-      );
+  factory TurnHeaderRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) => TurnHeaderRow(
+    rowId: rowId,
+    turnId: turnId,
+    entityId: entityId,
+    createdAt: createdAt,
+    origin: json['origin']?.toString() ?? '',
+    state: json['state']?.toString() ?? '',
+    startedAt: json['startedAt'] as int?,
+    raw: json,
+  );
 }
 
 /// One attachment carried by a user-input row (`attachments[]` in the row
@@ -285,12 +303,12 @@ class RowAttachment {
   });
 
   factory RowAttachment.fromJson(Map<String, Object?> json) => RowAttachment(
-        ref: json['ref']?.toString() ?? '',
-        fileName: json['fileName']?.toString() ?? '',
-        mime: json['mime']?.toString() ?? '',
-        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
-        previewRef: json['previewRef']?.toString(),
-      );
+    ref: json['ref']?.toString() ?? '',
+    fileName: json['fileName']?.toString() ?? '',
+    mime: json['mime']?.toString() ?? '',
+    bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+    previewRef: json['previewRef']?.toString(),
+  );
 
   bool get isImage => mime.startsWith('image/');
 }
@@ -299,25 +317,46 @@ class UserInputRow extends ConversationRow {
   final String text;
   final List<RowAttachment> attachments;
   final Map<String, Object?> raw;
-  const UserInputRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.text, this.attachments = const [], required this.raw});
-  factory UserInputRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
-      UserInputRow(
-        rowId: rowId,
-        turnId: turnId,
-        entityId: entityId,
-        createdAt: createdAt,
-        text: json['inputText']?.toString() ?? json['text']?.toString() ?? '',
-        attachments: [
-          for (final a in (json['attachments'] as List? ?? const []))
-            if (a is Map) RowAttachment.fromJson(a.cast<String, Object?>()),
-        ],
-        raw: json,
-      );
+  const UserInputRow({
+    required super.rowId,
+    super.turnId,
+    super.entityId,
+    super.createdAt,
+    required this.text,
+    this.attachments = const [],
+    required this.raw,
+  });
+  factory UserInputRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) => UserInputRow(
+    rowId: rowId,
+    turnId: turnId,
+    entityId: entityId,
+    createdAt: createdAt,
+    text: json['inputText']?.toString() ?? json['text']?.toString() ?? '',
+    attachments: [
+      for (final a in (json['attachments'] as List? ?? const []))
+        if (a is Map) RowAttachment.fromJson(a.cast<String, Object?>()),
+    ],
+    raw: json,
+  );
 
   @override
   ConversationRow withDelta(List<String> path, String append) {
     if (path.length == 1 && path[0] == 'inputText') {
-      return UserInputRow(rowId: rowId, turnId: turnId, entityId: entityId, createdAt: createdAt, text: text + append, attachments: attachments, raw: raw);
+      return UserInputRow(
+        rowId: rowId,
+        turnId: turnId,
+        entityId: entityId,
+        createdAt: createdAt,
+        text: text + append,
+        attachments: attachments,
+        raw: raw,
+      );
     }
     return this;
   }
@@ -327,9 +366,9 @@ class UserInputRow extends ConversationRow {
 
   @override
   Map<String, Object?> toCacheMap() => {
-        ...super.toCacheMap(),
-        'inputText': text,
-      };
+    ...super.toCacheMap(),
+    'inputText': text,
+  };
 }
 
 class AssistantTextRow extends ConversationRow {
@@ -337,23 +376,46 @@ class AssistantTextRow extends ConversationRow {
   final String state; // streaming | complete | interrupted | failed
   final String? model;
   final Map<String, Object?> raw;
-  const AssistantTextRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.text, required this.state, this.model, required this.raw});
-  factory AssistantTextRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
-      AssistantTextRow(
-        rowId: rowId,
-        turnId: turnId,
-        entityId: entityId,
-        createdAt: createdAt,
-        text: json['text']?.toString() ?? '',
-        state: json['state']?.toString() ?? 'complete',
-        model: json['model'] as String?,
-        raw: json,
-      );
+  const AssistantTextRow({
+    required super.rowId,
+    super.turnId,
+    super.entityId,
+    super.createdAt,
+    required this.text,
+    required this.state,
+    this.model,
+    required this.raw,
+  });
+  factory AssistantTextRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) => AssistantTextRow(
+    rowId: rowId,
+    turnId: turnId,
+    entityId: entityId,
+    createdAt: createdAt,
+    text: json['text']?.toString() ?? '',
+    state: json['state']?.toString() ?? 'complete',
+    model: json['model'] as String?,
+    raw: json,
+  );
 
   @override
   ConversationRow withDelta(List<String> path, String append) {
     if (path.length == 1 && path[0] == 'text') {
-      return AssistantTextRow(rowId: rowId, turnId: turnId, entityId: entityId, createdAt: createdAt, text: text + append, state: state, model: model, raw: raw);
+      return AssistantTextRow(
+        rowId: rowId,
+        turnId: turnId,
+        entityId: entityId,
+        createdAt: createdAt,
+        text: text + append,
+        state: state,
+        model: model,
+        raw: raw,
+      );
     }
     return this;
   }
@@ -363,30 +425,49 @@ class AssistantTextRow extends ConversationRow {
 
   @override
   Map<String, Object?> toCacheMap() => {
-        ...super.toCacheMap(),
-        'text': text,
-        'state': state,
-      };
+    ...super.toCacheMap(),
+    'text': text,
+    'state': state,
+  };
 }
 
 class ReasoningRow extends ConversationRow {
   final String text;
   final Map<String, Object?> raw;
-  const ReasoningRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.text, required this.raw});
-  factory ReasoningRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
-      ReasoningRow(
-        rowId: rowId,
-        turnId: turnId,
-        entityId: entityId,
-        createdAt: createdAt,
-        text: json['text']?.toString() ?? '',
-        raw: json,
-      );
+  const ReasoningRow({
+    required super.rowId,
+    super.turnId,
+    super.entityId,
+    super.createdAt,
+    required this.text,
+    required this.raw,
+  });
+  factory ReasoningRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) => ReasoningRow(
+    rowId: rowId,
+    turnId: turnId,
+    entityId: entityId,
+    createdAt: createdAt,
+    text: json['text']?.toString() ?? '',
+    raw: json,
+  );
 
   @override
   ConversationRow withDelta(List<String> path, String append) {
     if (path.length == 1 && path[0] == 'text') {
-      return ReasoningRow(rowId: rowId, turnId: turnId, entityId: entityId, createdAt: createdAt, text: text + append, raw: raw);
+      return ReasoningRow(
+        rowId: rowId,
+        turnId: turnId,
+        entityId: entityId,
+        createdAt: createdAt,
+        text: text + append,
+        raw: raw,
+      );
     }
     return this;
   }
@@ -395,10 +476,7 @@ class ReasoningRow extends ConversationRow {
   String get textForCache => text;
 
   @override
-  Map<String, Object?> toCacheMap() => {
-        ...super.toCacheMap(),
-        'text': text,
-      };
+  Map<String, Object?> toCacheMap() => {...super.toCacheMap(), 'text': text};
 }
 
 class ToolCallRow extends ConversationRow {
@@ -430,7 +508,13 @@ class ToolCallRow extends ConversationRow {
     this.endedAt,
     required this.raw,
   });
-  factory ToolCallRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) {
+  factory ToolCallRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) {
     final outputVal = json['output'];
     String? outputText;
     Map<String, Object?>? outputObj;
@@ -449,7 +533,9 @@ class ToolCallRow extends ConversationRow {
       toolName: json['toolName']?.toString() ?? '',
       status: json['status']?.toString() ?? '',
       inputText: json['inputText'] as String?,
-      input: json['input'] is Map<String, Object?> ? json['input'] as Map<String, Object?> : null,
+      input: json['input'] is Map<String, Object?>
+          ? json['input'] as Map<String, Object?>
+          : null,
       output: outputText,
       outputObj: outputObj,
       error: json['error']?.toString(),
@@ -462,10 +548,7 @@ class ToolCallRow extends ConversationRow {
   @override
   ConversationRow withDelta(List<String> path, String append) {
     if (path.length == 2 && path[0] == 'output' && path[1] == 'text') {
-      final merged = {
-        ...raw,
-        'output': (output ?? '') + append,
-      };
+      final merged = {...raw, 'output': (output ?? '') + append};
       return ToolCallRow.fromJson(merged, rowId, turnId, entityId, createdAt);
     }
     if (path.length == 1 && path[0] == 'inputText') {
@@ -476,17 +559,16 @@ class ToolCallRow extends ConversationRow {
   }
 
   @override
-  String get textForCache =>
-      [inputText, output].whereType<String>().join('\n');
+  String get textForCache => [inputText, output].whereType<String>().join('\n');
 
   @override
   Map<String, Object?> toCacheMap() => {
-        ...super.toCacheMap(),
-        if (inputText != null) 'inputText': inputText,
-        if (output != null) 'output': output,
-        'toolName': toolName,
-        'toolStatus': status,
-      };
+    ...super.toCacheMap(),
+    if (inputText != null) 'inputText': inputText,
+    if (output != null) 'output': output,
+    'toolName': toolName,
+    'toolStatus': status,
+  };
 }
 
 class SubagentRow extends ConversationRow {
@@ -504,18 +586,23 @@ class SubagentRow extends ConversationRow {
     this.summaryText = '',
     required this.raw,
   });
-  factory SubagentRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) =>
-      SubagentRow(
-        rowId: rowId,
-        turnId: turnId,
-        entityId: entityId,
-        createdAt: createdAt,
-        subagentType: json['subagentType']?.toString() ?? '',
-        status: json['status']?.toString() ?? '',
-        summaryText:
-            json['summaryText']?.toString() ?? json['summary']?.toString() ?? '',
-        raw: json,
-      );
+  factory SubagentRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) => SubagentRow(
+    rowId: rowId,
+    turnId: turnId,
+    entityId: entityId,
+    createdAt: createdAt,
+    subagentType: json['subagentType']?.toString() ?? '',
+    status: json['status']?.toString() ?? '',
+    summaryText:
+        json['summaryText']?.toString() ?? json['summary']?.toString() ?? '',
+    raw: json,
+  );
 
   @override
   String get textForCache => summaryText;
@@ -536,15 +623,25 @@ class TimelineMarkerRow extends ConversationRow {
     this.tokensAfter,
     required this.raw,
   });
-  factory TimelineMarkerRow.fromJson(Map<String, Object?> json, int rowId, String? turnId, String? entityId, int? createdAt) {
+  factory TimelineMarkerRow.fromJson(
+    Map<String, Object?> json,
+    int rowId,
+    String? turnId,
+    String? entityId,
+    int? createdAt,
+  ) {
     final marker = json['marker'];
     String markerType = '';
     int? tokensBefore;
     int? tokensAfter;
     if (marker is Map) {
       markerType = marker['type']?.toString() ?? '';
-      tokensBefore = marker['tokensBefore'] is int ? marker['tokensBefore'] as int : null;
-      tokensAfter = marker['tokensAfter'] is int ? marker['tokensAfter'] as int : null;
+      tokensBefore = marker['tokensBefore'] is int
+          ? marker['tokensBefore'] as int
+          : null;
+      tokensAfter = marker['tokensAfter'] is int
+          ? marker['tokensAfter'] as int
+          : null;
     }
     return TimelineMarkerRow(
       rowId: rowId,
@@ -561,7 +658,13 @@ class TimelineMarkerRow extends ConversationRow {
 
 class UnknownRow extends ConversationRow {
   final String kind;
-  const UnknownRow({required super.rowId, super.turnId, super.entityId, super.createdAt, required this.kind});
+  const UnknownRow({
+    required super.rowId,
+    super.turnId,
+    super.entityId,
+    super.createdAt,
+    required this.kind,
+  });
 }
 
 // ---------- Conversation state ----------
@@ -603,31 +706,49 @@ class ConversationSnapshot {
     final rowsJson = json['rows'];
     final rows = rowsJson is Map<String, Object?> && rowsJson['window'] is List
         ? (rowsJson['window'] as List)
-            .whereType<Map<String, Object?>>()
-            .map(ConversationRow.fromJson)
-            .toList()
+              .whereType<Map<String, Object?>>()
+              .map(ConversationRow.fromJson)
+              .toList()
         : <ConversationRow>[];
     final interactions = json['pendingInteractions'] is List
-        ? (json['pendingInteractions'] as List).whereType<Map<String, Object?>>().toList()
+        ? (json['pendingInteractions'] as List)
+              .whereType<Map<String, Object?>>()
+              .toList()
         : <Map<String, Object?>>[];
     final pendingCommands = json['pendingCommands'] is List
-        ? (json['pendingCommands'] as List).whereType<Map<String, Object?>>().toList()
+        ? (json['pendingCommands'] as List)
+              .whereType<Map<String, Object?>>()
+              .toList()
         : <Map<String, Object?>>[];
     return ConversationSnapshot(
       sessionId: json['sessionId']?.toString() ?? '',
       logEpoch: json['logEpoch']?.toString() ?? '',
       seq: json['seq'] as int? ?? 0,
       revision: json['revision'] as int? ?? 0,
-      control: json['control'] is Map<String, Object?> ? json['control'] as Map<String, Object?> : const {},
-      availability: json['availability'] is Map<String, Object?> ? json['availability'] as Map<String, Object?> : null,
-      inputRouting: json['inputRouting'] is Map<String, Object?> ? json['inputRouting'] as Map<String, Object?> : null,
-      meta: json['meta'] is Map<String, Object?> ? json['meta'] as Map<String, Object?> : null,
-      config: json['config'] is Map<String, Object?> ? json['config'] as Map<String, Object?> : null,
+      control: json['control'] is Map<String, Object?>
+          ? json['control'] as Map<String, Object?>
+          : const {},
+      availability: json['availability'] is Map<String, Object?>
+          ? json['availability'] as Map<String, Object?>
+          : null,
+      inputRouting: json['inputRouting'] is Map<String, Object?>
+          ? json['inputRouting'] as Map<String, Object?>
+          : null,
+      meta: json['meta'] is Map<String, Object?>
+          ? json['meta'] as Map<String, Object?>
+          : null,
+      config: json['config'] is Map<String, Object?>
+          ? json['config'] as Map<String, Object?>
+          : null,
       pendingInteractions: interactions,
       pendingCommands: pendingCommands,
       rows: rows,
-      totalCount: rowsJson is Map<String, Object?> ? rowsJson['totalCount'] as int? ?? rows.length : rows.length,
-      firstRowId: rowsJson is Map<String, Object?> ? rowsJson['firstRowId'] as int? ?? 0 : 0,
+      totalCount: rowsJson is Map<String, Object?>
+          ? rowsJson['totalCount'] as int? ?? rows.length
+          : rows.length,
+      firstRowId: rowsJson is Map<String, Object?>
+          ? rowsJson['firstRowId'] as int? ?? 0
+          : 0,
     );
   }
 }
@@ -702,9 +823,9 @@ class InteractionQuestion {
         header: json['header']?.toString() ?? '',
         options: json['options'] is List
             ? (json['options'] as List)
-                .whereType<Map<String, Object?>>()
-                .map(InteractionQuestionOption.fromJson)
-                .toList()
+                  .whereType<Map<String, Object?>>()
+                  .map(InteractionQuestionOption.fromJson)
+                  .toList()
             : const [],
         multiSelect: json['multiSelect'] as bool? ?? false,
       );
@@ -731,11 +852,14 @@ class PendingInteraction {
     required this.payload,
   });
 
-  factory PendingInteraction.fromJson(Map<String, Object?> json) => PendingInteraction(
+  factory PendingInteraction.fromJson(Map<String, Object?> json) =>
+      PendingInteraction(
         interactionId: json['interactionId']?.toString() ?? '',
         kind: json['kind']?.toString() ?? 'userInput',
         anchorRowId: json['anchorRowId'] as int?,
-        payload: json['payload'] is Map<String, Object?> ? json['payload'] as Map<String, Object?> : const {},
+        payload: json['payload'] is Map<String, Object?>
+            ? json['payload'] as Map<String, Object?>
+            : const {},
       );
 
   bool get isPermission => kind == 'permission';
@@ -756,16 +880,16 @@ class PendingInteraction {
 
   List<InteractionOption> get options => payload['options'] is List
       ? (payload['options'] as List)
-          .whereType<Map<String, Object?>>()
-          .map(InteractionOption.fromJson)
-          .toList()
+            .whereType<Map<String, Object?>>()
+            .map(InteractionOption.fromJson)
+            .toList()
       : const [];
 
   List<InteractionQuestion> get questions => payload['questions'] is List
       ? (payload['questions'] as List)
-          .whereType<Map<String, Object?>>()
-          .map(InteractionQuestion.fromJson)
-          .toList()
+            .whereType<Map<String, Object?>>()
+            .map(InteractionQuestion.fromJson)
+            .toList()
       : const [];
 
   bool get hasQuestions => questions.isNotEmpty;
@@ -838,31 +962,30 @@ class PendingRequest {
     this.requestedAt,
   });
 
-  factory PendingRequest.fromJson(Map<String, Object?> json) =>
-      PendingRequest(
-        requestId: json['requestId']?.toString() ?? '',
-        toolCallId: json['toolCallId']?.toString(),
-        toolName: json['toolName']?.toString() ?? '',
-        reason: json['reason']?.toString() ?? '',
-        riskLevel: json['riskLevel']?.toString() ?? '',
-        input: json['input'] is Map<String, Object?>
-            ? json['input'] as Map<String, Object?>
-            : const {},
-        options: json['options'] is List
-            ? (json['options'] as List)
-                .whereType<Map<String, Object?>>()
-                .map(PendingRequestOption.fromJson)
-                .toList()
-            : const [],
-        requestedAt: json['requestedAt'] as int?,
-      );
+  factory PendingRequest.fromJson(Map<String, Object?> json) => PendingRequest(
+    requestId: json['requestId']?.toString() ?? '',
+    toolCallId: json['toolCallId']?.toString(),
+    toolName: json['toolName']?.toString() ?? '',
+    reason: json['reason']?.toString() ?? '',
+    riskLevel: json['riskLevel']?.toString() ?? '',
+    input: json['input'] is Map<String, Object?>
+        ? json['input'] as Map<String, Object?>
+        : const {},
+    options: json['options'] is List
+        ? (json['options'] as List)
+              .whereType<Map<String, Object?>>()
+              .map(PendingRequestOption.fromJson)
+              .toList()
+        : const [],
+    requestedAt: json['requestedAt'] as int?,
+  );
 
   /// AskUserQuestion requests carry `input.questions`.
   List<InteractionQuestion> get questions => input['questions'] is List
       ? (input['questions'] as List)
-          .whereType<Map<String, Object?>>()
-          .map(InteractionQuestion.fromJson)
-          .toList()
+            .whereType<Map<String, Object?>>()
+            .map(InteractionQuestion.fromJson)
+            .toList()
       : const [];
 
   bool get hasQuestions => questions.isNotEmpty;
@@ -881,7 +1004,10 @@ class PendingRequest {
   /// True for anything the user must answer textually (as opposed to an
   /// allow/deny permission): AskUserQuestion, ExitPlanMode, free-text input.
   bool get isElicitation =>
-      hasQuestions || toolName == 'AskUserQuestion' || isExitPlanMode || isFreeTextInput;
+      hasQuestions ||
+      toolName == 'AskUserQuestion' ||
+      isExitPlanMode ||
+      isFreeTextInput;
 
   /// Human-readable label for a permission option's `kind`
   /// (`allow_once`/`allowOnce` | `allow_always`/`allowAlways` | `deny` |
@@ -978,9 +1104,9 @@ class ContextUsage {
       size: json['size'] as int? ?? 0,
       breakdown: json['breakdown'] is List
           ? (json['breakdown'] as List)
-              .whereType<Map<String, Object?>>()
-              .map(ContextBreakdownEntry.fromJson)
-              .toList()
+                .whereType<Map<String, Object?>>()
+                .map(ContextBreakdownEntry.fromJson)
+                .toList()
           : const [],
       cache: json['cache'] is Map<String, Object?>
           ? json['cache'] as Map<String, Object?>
@@ -988,8 +1114,7 @@ class ContextUsage {
     );
   }
 
-  double? get fillRatio =>
-      size <= 0 ? null : (used / size).clamp(0.0, 1.0);
+  double? get fillRatio => size <= 0 ? null : (used / size).clamp(0.0, 1.0);
 
   /// Average cache hit rate: prefer the runtime's rolling `hitRate`, fall back
   /// to cacheReadTokens / inputTokens.
@@ -1035,33 +1160,33 @@ class SessionModelConfig {
     return SessionModelConfig(
       provider: model is Map<String, Object?>
           ? (model['current'] is Map<String, Object?>
-              ? (model['current'] as Map<String, Object?>)['providerId']?.toString()
-              : null)
+                ? (model['current'] as Map<String, Object?>)['providerId']
+                      ?.toString()
+                : null)
           : null,
       model: model is Map<String, Object?>
           ? (model['current'] is Map<String, Object?>
-              ? (model['current'] as Map<String, Object?>)['modelId']?.toString()
-              : null)
+                ? (model['current'] as Map<String, Object?>)['modelId']
+                      ?.toString()
+                : null)
           : null,
       thoughtLevel: thought is Map<String, Object?>
           ? thought['current']?.toString()
           : null,
-      mode: mode is Map<String, Object?>
-          ? mode['current']?.toString()
-          : null,
-      availableModels: model is Map<String, Object?> &&
-              model['available'] is List
+      mode: mode is Map<String, Object?> ? mode['current']?.toString() : null,
+      availableModels:
+          model is Map<String, Object?> && model['available'] is List
           ? (model['available'] as List)
-              .whereType<Map<String, Object?>>()
-              .map(ModelOption.fromJson)
-              .toList()
+                .whereType<Map<String, Object?>>()
+                .map(ModelOption.fromJson)
+                .toList()
           : const [],
-      availableThoughtLevels: thought is Map<String, Object?> &&
-              thought['available'] is List
+      availableThoughtLevels:
+          thought is Map<String, Object?> && thought['available'] is List
           ? (thought['available'] as List)
-              .whereType<Map<String, Object?>>()
-              .map(ThoughtLevelOption.fromJson)
-              .toList()
+                .whereType<Map<String, Object?>>()
+                .map(ThoughtLevelOption.fromJson)
+                .toList()
           : const [],
     );
   }
@@ -1106,9 +1231,9 @@ class ModelOption {
       contextWindow: json['contextWindow'] as int?,
       reasoningLevels: reasoning != null && reasoning['levels'] is List
           ? (reasoning['levels'] as List)
-              .whereType<Map<String, Object?>>()
-              .map(ThoughtLevelOption.fromJson)
-              .toList()
+                .whereType<Map<String, Object?>>()
+                .map(ThoughtLevelOption.fromJson)
+                .toList()
           : const [],
     );
   }

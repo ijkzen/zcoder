@@ -8,7 +8,6 @@
 /// sign-extended on decode (matching the desktop's JS int32 coercion).
 library;
 
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -99,13 +98,23 @@ class ChannelClient {
 
   RpcChannel channel(String name) => RpcChannel(name, this);
 
-  Future<Object?> requestPromise(String channel, String method, [Object? args]) {
+  Future<Object?> requestPromise(
+    String channel,
+    String method, [
+    Object? args,
+  ]) {
     final id = ++_lastRequestId;
     final completer = Completer<Object?>();
     _pending[id] = completer;
     // The protocol spreads the args array into the method call, so a single
     // argument must be wrapped: `call(m, x)` -> `service.m(x)`.
-    _sendRequest(MsgType.promise, id, channel, method, args == null ? const [] : [args]);
+    _sendRequest(
+      MsgType.promise,
+      id,
+      channel,
+      method,
+      args == null ? const [] : [args],
+    );
     return completer.future;
   }
 
@@ -115,7 +124,13 @@ class ChannelClient {
     final sub = _EventSubscription(id, controller);
     _events[id] = sub;
     _controllers[id] = controller;
-    _sendRequest(MsgType.eventListen, id, channel, method, args == null ? const [] : [args]);
+    _sendRequest(
+      MsgType.eventListen,
+      id,
+      channel,
+      method,
+      args == null ? const [] : [args],
+    );
     controller.onCancel = () {
       _sendCancelOrDispose(MsgType.eventDispose, id);
       _events.remove(id);
@@ -124,7 +139,13 @@ class ChannelClient {
     return controller.stream;
   }
 
-  void _sendRequest(int type, int id, String channel, String method, Object? args) {
+  void _sendRequest(
+    int type,
+    int id,
+    String channel,
+    String method,
+    Object? args,
+  ) {
     if (!_initialized) {
       // The device sends Initialize first; we must not send before that.
       throw StateError('binary rpc not initialized');
@@ -171,17 +192,21 @@ class ChannelClient {
         if (id is int) {
           final c = _pending.remove(id);
           if (c != null) {
-            final data2 = args is Map<String, Object?> ? args : <String, Object?>{};
+            final data2 = args is Map<String, Object?>
+                ? args
+                : <String, Object?>{};
             final extra = Map<String, Object?>.from(data2);
             final name = extra.remove('name')?.toString() ?? 'Error';
             final message = extra.remove('message')?.toString() ?? '';
             final stack = extra.remove('stack');
-            c.completeError(RpcError(
-              name,
-              message,
-              stack is List ? stack.join('\n') : stack?.toString(),
-              extra,
-            ));
+            c.completeError(
+              RpcError(
+                name,
+                message,
+                stack is List ? stack.join('\n') : stack?.toString(),
+                extra,
+              ),
+            );
           }
         }
       case MsgType.promiseErrorObj:

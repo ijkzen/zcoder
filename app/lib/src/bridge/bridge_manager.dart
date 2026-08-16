@@ -8,7 +8,6 @@ import '../protocol/zlog.dart';
 
 import 'dart:async';
 
-
 import '../protocol/protocol.dart';
 import '../protocol/core/random_ids.dart' as ids;
 
@@ -46,7 +45,8 @@ class BridgeManager {
 
   Stream<BridgePhase> get phaseStream => _phaseController.stream;
   Stream<List<Workspace>> get workspacesStream => _workspacesController.stream;
-  Stream<Workspace?> get activeWorkspaceStream => _activeWorkspaceController.stream;
+  Stream<Workspace?> get activeWorkspaceStream =>
+      _activeWorkspaceController.stream;
   Stream<BridgeException> get errorsStream => _errorsController.stream;
 
   BridgePhase _phase = BridgePhase.idle;
@@ -140,7 +140,9 @@ class BridgeManager {
         // The device keeps its bridge across our reconnects and replays its
         // unacked frames; we mirror that for our own outbound side.
         _transport?.replayUnacked();
-        _setPhase(_topicSession == null ? BridgePhase.pairing : BridgePhase.ready);
+        _setPhase(
+          _topicSession == null ? BridgePhase.pairing : BridgePhase.ready,
+        );
         _requestWorkspaceList();
         if (_degraded && _transport != null) {
           unawaited(_recoverBridge());
@@ -216,14 +218,18 @@ class BridgeManager {
 
   /// Opens a bridge to [workspace] and initializes the topic session.
   Future<void> selectWorkspace(Workspace workspace) async {
-    zlog('[bridge.selectWorkspace] enter phase=$_phase '
-        'recoveryInFlight=$_recoveryInFlight');
+    zlog(
+      '[bridge.selectWorkspace] enter phase=$_phase '
+      'recoveryInFlight=$_recoveryInFlight',
+    );
     if (_phase != BridgePhase.pairing && _phase != BridgePhase.ready) {
       // The relay is mid-reconnect (or still authenticating): wait for it to
       // settle instead of failing — tapping a project during a reconnect
       // window must not show an error.
-      zlog('[bridge.selectWorkspace] waiting for relay ready '
-          '(phase=$_phase)');
+      zlog(
+        '[bridge.selectWorkspace] waiting for relay ready '
+        '(phase=$_phase)',
+      );
       await _waitForRelayReady();
       zlog('[bridge.selectWorkspace] relay ready, phase=$_phase');
     }
@@ -245,19 +251,25 @@ class BridgeManager {
     final completer = Completer<BridgeIdentity>();
     _pendingBridgeOpen[requestId] = completer;
 
-    zlog('[zremote] sending workspace-bridge-open '
-        'key=${workspace.workspaceKey} task=${workspace.taskId}');
-    relay.sendPayload(workspaceBridgeOpen(
-      requestId: requestId,
-      identity: identity,
-      workspaceKey: workspace.workspaceKey,
-      taskId: workspace.taskId,
-    ));
+    zlog(
+      '[zremote] sending workspace-bridge-open '
+      'key=${workspace.workspaceKey} task=${workspace.taskId}',
+    );
+    relay.sendPayload(
+      workspaceBridgeOpen(
+        requestId: requestId,
+        identity: identity,
+        workspaceKey: workspace.workspaceKey,
+        taskId: workspace.taskId,
+      ),
+    );
 
     final readyIdentity = await completer.future.timeout(
       const Duration(seconds: 30),
       onTimeout: () => throw BridgeException(
-          'desktop-bootstrap-timeout', 'bridge open timed out'),
+        'desktop-bootstrap-timeout',
+        'bridge open timed out',
+      ),
     );
 
     _activeWorkspace = workspace;
@@ -269,10 +281,15 @@ class BridgeManager {
   /// bridge identity and awaits channel initialization, replacing any
   /// previous stack. Conversation controllers resubscribe via
   /// [recoveredStream].
-  Future<void> _installStack(BridgeIdentity readyIdentity, String workspaceKey) async {
+  Future<void> _installStack(
+    BridgeIdentity readyIdentity,
+    String workspaceKey,
+  ) async {
     _degradedSub?.cancel();
-    final transport =
-        RpcFrameTransport(sendPayload: relay.sendPayload, identity: readyIdentity);
+    final transport = RpcFrameTransport(
+      sendPayload: relay.sendPayload,
+      identity: readyIdentity,
+    );
     _degradedSub = transport.degradedStream.listen(_onDegraded);
     _transport = transport;
 
@@ -289,7 +306,9 @@ class BridgeManager {
     rpc.start();
     try {
       await rpc.whenInitialized.timeout(const Duration(seconds: 30));
-      zlog('[zremote] rpc initialized (bridge ${readyIdentity.bridgeSessionId})');
+      zlog(
+        '[zremote] rpc initialized (bridge ${readyIdentity.bridgeSessionId})',
+      );
       await channel.initialize().timeout(const Duration(seconds: 30));
       _setPhase(BridgePhase.ready);
       _sendViewState();
@@ -304,7 +323,9 @@ class BridgeManager {
 
   /// Waits until the relay is paired again (phase pairing/ready); throws
   /// [BridgeException] after [timeout] so the caller can surface a real error.
-  Future<void> _waitForRelayReady({Duration timeout = const Duration(seconds: 20)}) async {
+  Future<void> _waitForRelayReady({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
     if (_phase == BridgePhase.pairing || _phase == BridgePhase.ready) return;
     final completer = Completer<void>();
     late StreamSubscription<RelayState> sub;
@@ -314,10 +335,15 @@ class BridgeManager {
       }
     });
     try {
-      await completer.future.timeout(timeout, onTimeout: () {
-        throw BridgeException('relay-not-ready',
-            'relay 未就绪（${_phase.name}），请稍后重试');
-      });
+      await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          throw BridgeException(
+            'relay-not-ready',
+            'relay 未就绪（${_phase.name}），请稍后重试',
+          );
+        },
+      );
     } finally {
       await sub.cancel();
     }
@@ -359,8 +385,9 @@ class BridgeManager {
       return true;
     }
     try {
-      final res = await _requestReconnect(workspace.workspaceKey)
-          .timeout(const Duration(seconds: 15));
+      final res = await _requestReconnect(
+        workspace.workspaceKey,
+      ).timeout(const Duration(seconds: 15));
       if (res.success) {
         zlog('[zremote] workspace reconnected: ${workspace.workspaceKey}');
         transport.replayUnacked();
@@ -405,20 +432,27 @@ class BridgeManager {
     if (!_degraded || _disposed) return Future.value();
     final completer = Completer<void>();
     _healthyWaiters.add(completer);
-    return completer.future.timeout(timeout, onTimeout: () {
-      _healthyWaiters.remove(completer);
-      throw TimeoutException('bridge recovery timeout');
-    });
+    return completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        _healthyWaiters.remove(completer);
+        throw TimeoutException('bridge recovery timeout');
+      },
+    );
   }
 
-  Future<WorkspaceReconnectResponse> _requestReconnect(String workspaceKey) async {
+  Future<WorkspaceReconnectResponse> _requestReconnect(
+    String workspaceKey,
+  ) async {
     final requestId = _nextRequestId('workspace-reconnect');
     final completer = Completer<WorkspaceReconnectResponse>();
     _pendingReconnect[requestId] = completer;
-    relay.sendPayload(workspaceReconnectRequest(
-      requestId: requestId,
-      workspaceKey: workspaceKey,
-    ));
+    relay.sendPayload(
+      workspaceReconnectRequest(
+        requestId: requestId,
+        workspaceKey: workspaceKey,
+      ),
+    );
     return completer.future;
   }
 
@@ -436,18 +470,24 @@ class BridgeManager {
     final requestId = _nextRequestId('bridge-reopen');
     final completer = Completer<BridgeIdentity>();
     _pendingBridgeOpen[requestId] = completer;
-    zlog('[zremote] reopening bridge for ${workspace.workspaceKey} '
-        '(gen ${identity.bridgeGeneration})');
-    relay.sendPayload(workspaceBridgeOpen(
-      requestId: requestId,
-      identity: identity,
-      workspaceKey: workspace.workspaceKey,
-      taskId: workspace.taskId,
-    ));
+    zlog(
+      '[zremote] reopening bridge for ${workspace.workspaceKey} '
+      '(gen ${identity.bridgeGeneration})',
+    );
+    relay.sendPayload(
+      workspaceBridgeOpen(
+        requestId: requestId,
+        identity: identity,
+        workspaceKey: workspace.workspaceKey,
+        taskId: workspace.taskId,
+      ),
+    );
     final readyIdentity = await completer.future.timeout(
       const Duration(seconds: 30),
       onTimeout: () => throw BridgeException(
-          'bridge-reopen-timeout', 'bridge reopen timed out'),
+        'bridge-reopen-timeout',
+        'bridge reopen timed out',
+      ),
     );
     await _installStack(readyIdentity, workspace.workspaceKey);
     zlog('[zremote] bridge reopened');
@@ -470,16 +510,18 @@ class BridgeManager {
   void _sendViewState() {
     final workspace = _activeWorkspace;
     if (workspace == null) return;
-    relay.sendPayload(mobileViewStateUpdate(
-      activeWorkspaceKey: workspace.workspaceKey,
-      activeTaskId: workspace.taskId,
-      deviceInfo: mobileDeviceInfo(
-        platform: 'android',
-        version: '1.0.0',
-        name: 'zcode-remote',
-        language: 'zh-CN',
+    relay.sendPayload(
+      mobileViewStateUpdate(
+        activeWorkspaceKey: workspace.workspaceKey,
+        activeTaskId: workspace.taskId,
+        deviceInfo: mobileDeviceInfo(
+          platform: 'android',
+          version: '1.0.0',
+          name: 'zcode-remote',
+          language: 'zh-CN',
+        ),
       ),
-    ));
+    );
   }
 
   /// Sends a conversation command, gating on bridge health: while degraded
@@ -501,21 +543,25 @@ class BridgeManager {
     if (channel == null) {
       throw BridgeException('no-bridge', 'session channel not ready');
     }
-    Future<Map<String, Object?>> send() => channel.sendCommand(buildCommand(
-          commandId: newCommandId(),
-          clientId: clientId,
-          sessionId: sessionId,
-          baseRevision: baseRevision,
-          baseLogEpoch: baseLogEpoch,
-          type: type,
-          payload: payload,
-        ));
+    Future<Map<String, Object?>> send() => channel.sendCommand(
+      buildCommand(
+        commandId: newCommandId(),
+        clientId: clientId,
+        sessionId: sessionId,
+        baseRevision: baseRevision,
+        baseLogEpoch: baseLogEpoch,
+        type: type,
+        payload: payload,
+      ),
+    );
     try {
       return await send().timeout(timeout);
     } on TimeoutException {
       if (!_degraded) rethrow;
-      zlog('[zremote] command $type timed out during degradation — '
-          'waiting for recovery and retrying');
+      zlog(
+        '[zremote] command $type timed out during degradation — '
+        'waiting for recovery and retrying',
+      );
       await _waitHealthy();
       return send().timeout(timeout);
     }

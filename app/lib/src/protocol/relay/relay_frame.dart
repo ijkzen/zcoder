@@ -67,12 +67,12 @@ class AuthInit extends RelayMessage {
 
   @override
   Map<String, Object?> toJson() => {
-        'type': 'auth_init',
-        'role': role,
-        'device_sid': deviceSid,
-        'meta': meta,
-        'client_ts': clientTs,
-      };
+    'type': 'auth_init',
+    'role': role,
+    'device_sid': deviceSid,
+    'meta': meta,
+    'client_ts': clientTs,
+  };
 }
 
 class AuthChallenge extends RelayMessage {
@@ -94,18 +94,21 @@ class AuthResponse extends RelayMessage {
 
   @override
   Map<String, Object?> toJson() => {
-        'type': 'auth_response',
-        'device_sid': deviceSid,
-        'proof': proof,
-        'client_ts': clientTs,
-      };
+    'type': 'auth_response',
+    'device_sid': deviceSid,
+    'proof': proof,
+    'client_ts': clientTs,
+  };
 }
 
 class AuthAck extends RelayMessage {
   final String pairStatus; // "waiting" | "matched"
   const AuthAck(this.pairStatus);
   @override
-  Map<String, Object?> toJson() => {'type': 'auth_ack', 'pair_status': pairStatus};
+  Map<String, Object?> toJson() => {
+    'type': 'auth_ack',
+    'pair_status': pairStatus,
+  };
 }
 
 class PairStatusQuery extends RelayMessage {
@@ -114,17 +117,20 @@ class PairStatusQuery extends RelayMessage {
   const PairStatusQuery(this.deviceSid, this.clientTs);
   @override
   Map<String, Object?> toJson() => {
-        'type': 'pair_status_query',
-        'device_sid': deviceSid,
-        'client_ts': clientTs,
-      };
+    'type': 'pair_status_query',
+    'device_sid': deviceSid,
+    'client_ts': clientTs,
+  };
 }
 
 class PairStatusAck extends RelayMessage {
   final String pairStatus;
   const PairStatusAck(this.pairStatus);
   @override
-  Map<String, Object?> toJson() => {'type': 'pair_status_ack', 'pair_status': pairStatus};
+  Map<String, Object?> toJson() => {
+    'type': 'pair_status_ack',
+    'pair_status': pairStatus,
+  };
 }
 
 /// Application payload carried in a `data` frame.
@@ -132,14 +138,18 @@ class DataMessage extends RelayMessage {
   final Map<String, Object?> payload;
   final int clientTs;
   final int? serverTs;
-  const DataMessage({required this.payload, required this.clientTs, this.serverTs});
+  const DataMessage({
+    required this.payload,
+    required this.clientTs,
+    this.serverTs,
+  });
   @override
   Map<String, Object?> toJson() => {
-        'type': 'data',
-        'payload': payload,
-        'client_ts': clientTs,
-        if (serverTs != null) 'server_ts': serverTs,
-      };
+    'type': 'data',
+    'payload': payload,
+    'client_ts': clientTs,
+    if (serverTs != null) 'server_ts': serverTs,
+  };
 }
 
 class RelayError extends RelayMessage {
@@ -147,7 +157,11 @@ class RelayError extends RelayMessage {
   final String message;
   const RelayError(this.code, this.message);
   @override
-  Map<String, Object?> toJson() => {'type': 'error', 'code': code, 'message': message};
+  Map<String, Object?> toJson() => {
+    'type': 'error',
+    'code': code,
+    'message': message,
+  };
 }
 
 /// Parses an incoming relay frame.
@@ -177,12 +191,17 @@ RelayMessage? parseRelayMessage(String raw) {
       return DataMessage(
         payload: payload,
         clientTs: clientTs is int ? clientTs : 0,
-        serverTs: decoded['server_ts'] is int ? decoded['server_ts'] as int : null,
+        serverTs: decoded['server_ts'] is int
+            ? decoded['server_ts'] as int
+            : null,
       );
     case 'error':
       final code = decoded['code'];
       final message = decoded['message'];
-      return RelayError(code is String ? code : 'unknown', message is String ? message : '');
+      return RelayError(
+        code is String ? code : 'unknown',
+        message is String ? message : '',
+      );
     default:
       return null;
   }

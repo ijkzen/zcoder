@@ -82,7 +82,12 @@ class RelayFailure {
 /// `HMAC-SHA256(passHash, "${nonce}|${role}|${sid}")` (base64url, unpadded).
 /// (ADR-0001's older `sid|nonce|role` wording is wrong; see
 /// docs/protocol/07-flutter-app-audit.md finding 8.)
-String calculateProof(String passHash, String nonce, String entity, String deviceSid) {
+String calculateProof(
+  String passHash,
+  String nonce,
+  String entity,
+  String deviceSid,
+) {
   final hmac = Hmac(sha256, utf8.encode(passHash));
   final digest = hmac.convert(utf8.encode('$nonce|$entity|$deviceSid'));
   return base64Url.encode(digest.bytes).replaceAll('=', '');
@@ -133,7 +138,9 @@ class RelayClient {
   }
 
   Future<void> _openSocket() async {
-    _setState(_reconnectAttempt == 0 ? RelayState.connecting : RelayState.reconnecting);
+    _setState(
+      _reconnectAttempt == 0 ? RelayState.connecting : RelayState.reconnecting,
+    );
     final uri = Uri.parse('$relayWsUrl?mid=${credential.deviceMid ?? ''}');
     try {
       final socket = await WebSocket.connect(
@@ -142,24 +149,36 @@ class RelayClient {
       );
       _socket = socket;
       _reconnectAttempt = 0;
-      socket.listen(_onRawMessage, onDone: _onSocketClosed, onError: _onSocketError);
-      zlog('[zremote] relay connected, sending auth_init (sid=${credential.deviceSid})');
-      _send(AuthInit(
-        role: 'terminal',
-        deviceSid: credential.deviceSid,
-        meta: {
-          'platform': 'android',
-          'version': appVersion,
-          'name': clientName,
-        },
-        clientTs: DateTime.now().millisecondsSinceEpoch,
-      ));
+      socket.listen(
+        _onRawMessage,
+        onDone: _onSocketClosed,
+        onError: _onSocketError,
+      );
+      zlog(
+        '[zremote] relay connected, sending auth_init (sid=${credential.deviceSid})',
+      );
+      _send(
+        AuthInit(
+          role: 'terminal',
+          deviceSid: credential.deviceSid,
+          meta: {
+            'platform': 'android',
+            'version': appVersion,
+            'name': clientName,
+          },
+          clientTs: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
       _setState(RelayState.authenticating);
     } on SocketException catch (e) {
-      _emitFailure(RelayFailure(RelayFailureReason.relayUnavailable, e.message));
+      _emitFailure(
+        RelayFailure(RelayFailureReason.relayUnavailable, e.message),
+      );
       _scheduleReconnect();
     } on WebSocketException catch (e) {
-      _emitFailure(RelayFailure(RelayFailureReason.relayUnavailable, e.message));
+      _emitFailure(
+        RelayFailure(RelayFailureReason.relayUnavailable, e.message),
+      );
       _scheduleReconnect();
     }
   }
@@ -171,11 +190,18 @@ class RelayClient {
     switch (msg) {
       case AuthChallenge(:final nonce):
         zlog('[zremote] auth_challenge received, sending proof');
-        _send(AuthResponse(
-          deviceSid: credential.deviceSid,
-          proof: calculateProof(credential.passHash, nonce, 'terminal', credential.deviceSid),
-          clientTs: DateTime.now().millisecondsSinceEpoch,
-        ));
+        _send(
+          AuthResponse(
+            deviceSid: credential.deviceSid,
+            proof: calculateProof(
+              credential.passHash,
+              nonce,
+              'terminal',
+              credential.deviceSid,
+            ),
+            clientTs: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
       case AuthAck(:final pairStatus):
         zlog('[zremote] auth_ack pair_status=$pairStatus');
         if (pairStatus == 'matched') {
@@ -203,7 +229,8 @@ class RelayClient {
       case RelayError(:final code, :final message):
         zlog('[zremote] relay error: code=$code message=$message');
         _emitFailure(RelayFailure(mapRelayErrorCode(code), message));
-        if (code == RelayErrorCode.authFailed || code == RelayErrorCode.kicked) {
+        if (code == RelayErrorCode.authFailed ||
+            code == RelayErrorCode.kicked) {
           // Fatal: wrong credentials or kicked off — do not auto-reconnect.
           _userClosed = true;
           _setState(RelayState.closed);
@@ -262,20 +289,27 @@ class RelayClient {
   RelayFailure? _failureForCloseCode(int? closeCode, String? closeReason) {
     switch (closeCode) {
       case RelayCloseCode.sessionNotFound:
-        return RelayFailure(RelayFailureReason.sessionExpired,
-            closeReason ?? '会话不存在，请重新扫码配对');
+        return RelayFailure(
+          RelayFailureReason.sessionExpired,
+          closeReason ?? '会话不存在，请重新扫码配对',
+        );
       case RelayCloseCode.sessionConflict:
-        return RelayFailure(RelayFailureReason.sessionConflict,
-            closeReason ?? '同一时间只允许一个手机控制端');
+        return RelayFailure(
+          RelayFailureReason.sessionConflict,
+          closeReason ?? '同一时间只允许一个手机控制端',
+        );
       case RelayCloseCode.desktopDisconnected:
-        return RelayFailure(RelayFailureReason.desktopOffline,
-            closeReason ?? '桌面端已断开');
+        return RelayFailure(
+          RelayFailureReason.desktopOffline,
+          closeReason ?? '桌面端已断开',
+        );
       case RelayCloseCode.sessionExpired:
-        return RelayFailure(RelayFailureReason.sessionExpired,
-            closeReason ?? '远程控制会话已过期，请重新扫码');
+        return RelayFailure(
+          RelayFailureReason.sessionExpired,
+          closeReason ?? '远程控制会话已过期，请重新扫码',
+        );
       case RelayCloseCode.workspaceClosed:
-        return RelayFailure(RelayFailureReason.other,
-            closeReason ?? '工作区已关闭');
+        return RelayFailure(RelayFailureReason.other, closeReason ?? '工作区已关闭');
       default:
         return RelayFailure(RelayFailureReason.other, closeReason ?? '连接已断开');
     }
@@ -298,14 +332,25 @@ class RelayClient {
 
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: heartbeatIntervalMs), (_) {
-      _send(PairStatusQuery(credential.deviceSid, DateTime.now().millisecondsSinceEpoch));
-      _heartbeatTimeoutTimer?.cancel();
-      _heartbeatTimeoutTimer = Timer(const Duration(milliseconds: heartbeatTimeoutMs), () {
-        // No pair_status_ack in time — the link is stale; force reconnect.
-        _socket?.close();
-      });
-    });
+    _heartbeatTimer = Timer.periodic(
+      const Duration(milliseconds: heartbeatIntervalMs),
+      (_) {
+        _send(
+          PairStatusQuery(
+            credential.deviceSid,
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+        _heartbeatTimeoutTimer?.cancel();
+        _heartbeatTimeoutTimer = Timer(
+          const Duration(milliseconds: heartbeatTimeoutMs),
+          () {
+            // No pair_status_ack in time — the link is stale; force reconnect.
+            _socket?.close();
+          },
+        );
+      },
+    );
   }
 
   void _resetHeartbeatTimeout() {
@@ -330,11 +375,18 @@ class RelayClient {
   /// Sends an application payload as a relay `data` frame (layer 2+).
   void sendPayload(Map<String, Object?> payload) {
     if (_state != RelayState.paired || _socket == null) {
-      zlog('[zremote] queued payload (state=$_state): ${payload['zcode_type']}');
+      zlog(
+        '[zremote] queued payload (state=$_state): ${payload['zcode_type']}',
+      );
       _outboundQueue.add(payload);
       return;
     }
-    _send(DataMessage(payload: payload, clientTs: DateTime.now().millisecondsSinceEpoch));
+    _send(
+      DataMessage(
+        payload: payload,
+        clientTs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
   }
 
   void _flushOutboundQueue() {
@@ -342,7 +394,12 @@ class RelayClient {
     if (queued.isEmpty) return;
     zlog('[zremote] flushing ${queued.length} queued payload(s)');
     for (final payload in queued) {
-      _send(DataMessage(payload: payload, clientTs: DateTime.now().millisecondsSinceEpoch));
+      _send(
+        DataMessage(
+          payload: payload,
+          clientTs: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
     }
   }
 

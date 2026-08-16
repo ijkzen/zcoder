@@ -47,7 +47,11 @@ class TopicSession {
   final String clientId;
   final String workspaceKey;
 
-  TopicSession(this._channel, {required this.clientId, required this.workspaceKey});
+  TopicSession(
+    this._channel, {
+    required this.clientId,
+    required this.workspaceKey,
+  });
 
   final _conversationFrames = StreamController<TopicFrame>.broadcast();
   final _sessionsIndexFrames = StreamController<TopicFrame>.broadcast();
@@ -67,9 +71,9 @@ class TopicSession {
   String? get connectionId => _connectionId;
 
   Map<String, Object?> _listenArgs() => {
-        'workspacePath': workspaceKey,
-        if (_connectionId != null) 'connectionId': _connectionId,
-      };
+    'workspacePath': workspaceKey,
+    if (_connectionId != null) 'connectionId': _connectionId,
+  };
 
   StreamSubscription<Object?>? _conversationEventSub;
   StreamSubscription<Object?>? _sessionsIndexEventSub;
@@ -112,12 +116,16 @@ class TopicSession {
       if (raw is! Map<String, Object?>) return;
       final result = _assembler.accept(raw);
       if (result == null) return;
-      final frame =
-          TopicFrame.fromMap(result.frame, deliveryKind: result.deliveryKind);
+      final frame = TopicFrame.fromMap(
+        result.frame,
+        deliveryKind: result.deliveryKind,
+      );
       if (frame == null) return;
-      zlog('[zremote] wire frame delivered: topic=${frame.topic} '
-          'kind=${frame.snapshot != null ? 'snapshot' : 'deltas'} '
-          'toSeq=${frame.toSeq}');
+      zlog(
+        '[zremote] wire frame delivered: topic=${frame.topic} '
+        'kind=${frame.snapshot != null ? 'snapshot' : 'deltas'} '
+        'toSeq=${frame.toSeq}',
+      );
       if (!target.isClosed) target.add(frame);
     };
   }
@@ -126,14 +134,17 @@ class TopicSession {
   // connectionId (the host forwards it as the trusted connection for the
   // runtime-side subscription — without it the runtime never pushes).
   Map<String, Object?> _subscribeFields(String visibility) => {
-        'workspacePath': workspaceKey,
-        'runtimePolicy': 'existing-only',
-        if (_connectionId != null) 'connectionId': _connectionId,
-        if (visibility != 'foreground') 'visibility': visibility,
-      };
+    'workspacePath': workspaceKey,
+    'runtimePolicy': 'existing-only',
+    if (_connectionId != null) 'connectionId': _connectionId,
+    if (visibility != 'foreground') 'visibility': visibility,
+  };
 
   /// Subscribes to a conversation topic; resolves with the ack.
-  Future<SubscribeAck> subscribe(String sessionId, {String visibility = 'foreground'}) async {
+  Future<SubscribeAck> subscribe(
+    String sessionId, {
+    String visibility = 'foreground',
+  }) async {
     final raw = await _channel.call('subscribeConversationV4', {
       ..._subscribeFields(visibility),
       'sessionId': sessionId,
@@ -207,7 +218,10 @@ class TopicSession {
   /// Unsubscribes a conversation topic. Routed by workspace target alongside
   /// the topic/subscriptionId (the host resolves the runtime through
   /// `workspacePath`).
-  Future<void> unsubscribeConversation(String sessionId, String subscriptionId) async {
+  Future<void> unsubscribeConversation(
+    String sessionId,
+    String subscriptionId,
+  ) async {
     await _channel.call('unsubscribeConversationV4', {
       'workspacePath': workspaceKey,
       'sessionId': sessionId,
@@ -241,7 +255,7 @@ class TopicSession {
       'workspacePath': workspaceKey,
       'workspace': {'workspacePath': workspaceKey},
       'sessionId': sessionId,
-      if (beforeRowId != null) 'beforeRowId': beforeRowId,
+      'beforeRowId': ?beforeRowId,
       'limit': limit.clamp(1, ProtocolLimits.rowsRangeMaxLimit),
     });
     return raw is Map<String, Object?> ? raw : const {};
@@ -297,16 +311,20 @@ class TopicSession {
     void Function(double progress)? onProgress,
   }) async {
     if (bytes.length > ProtocolLimits.attachmentMaxBytes) {
-      throw StateError('attachment too large (max '
-          '${ProtocolLimits.attachmentMaxBytes ~/ (1024 * 1024)} MiB)');
+      throw StateError(
+        'attachment too large (max '
+        '${ProtocolLimits.attachmentMaxBytes ~/ (1024 * 1024)} MiB)',
+      );
     }
     final uploadId = 'upload-${ids.newCommandId()}';
     final base = _attachmentBase(uploadId, sessionId);
     final totalChunks =
         (bytes.length + attachmentChunkBytes - 1) ~/ attachmentChunkBytes;
     if (totalChunks > ProtocolLimits.attachmentUploadMaxChunks) {
-      throw StateError('attachment chunk count exceeds '
-          '${ProtocolLimits.attachmentUploadMaxChunks}');
+      throw StateError(
+        'attachment chunk count exceeds '
+        '${ProtocolLimits.attachmentUploadMaxChunks}',
+      );
     }
     final checksum = 'sha256:${sha256.convert(bytes).toString()}';
 
@@ -328,8 +346,7 @@ class TopicSession {
         'bytes': bytes.length,
       };
     }
-    var nextChunk =
-        (beginRes['nextChunkIndex'] as num?)?.toInt() ?? 0;
+    var nextChunk = (beginRes['nextChunkIndex'] as num?)?.toInt() ?? 0;
     for (var n = nextChunk; n < totalChunks; n++) {
       final start = n * attachmentChunkBytes;
       final end = math.min(start + attachmentChunkBytes, bytes.length);
@@ -338,8 +355,7 @@ class TopicSession {
         'chunkIndex': n,
         'dataBase64': base64Encode(Uint8List.sublistView(bytes, start, end)),
       });
-      final serverNext =
-          (chunkRes['nextChunkIndex'] as num?)?.toInt() ?? n + 1;
+      final serverNext = (chunkRes['nextChunkIndex'] as num?)?.toInt() ?? n + 1;
       if (serverNext != n + 1) {
         throw StateError('fault.attachment.invalidServerProgress');
       }
@@ -410,19 +426,18 @@ Map<String, Object?> buildCommand({
   String? baseLogEpoch,
   required String type,
   required Map<String, Object?> payload,
-}) =>
-    {
-      'commandId': commandId,
-      'clientId': clientId,
-      // The envelope schema is `sessionId: string().nullable()` — required but
-      // nullable. Omitting the key fails validation (proto.invalidPayload) for
-      // sessionless commands like createSession.
-      'sessionId': sessionId,
-      if (baseRevision != null) 'baseRevision': baseRevision,
-      if (baseLogEpoch != null) 'baseLogEpoch': baseLogEpoch,
-      'type': type,
-      'payload': payload,
-      'issuedAt': DateTime.now().millisecondsSinceEpoch,
-    };
+}) => {
+  'commandId': commandId,
+  'clientId': clientId,
+  // The envelope schema is `sessionId: string().nullable()` — required but
+  // nullable. Omitting the key fails validation (proto.invalidPayload) for
+  // sessionless commands like createSession.
+  'sessionId': sessionId,
+  'baseRevision': ?baseRevision,
+  'baseLogEpoch': ?baseLogEpoch,
+  'type': type,
+  'payload': payload,
+  'issuedAt': DateTime.now().millisecondsSinceEpoch,
+};
 
 String newCommandId() => ids.newCommandId();

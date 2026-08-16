@@ -26,7 +26,7 @@ class AppController extends ChangeNotifier {
   final AppDatabase db = AppDatabase.instance;
 
   AppController({String? clientId})
-      : clientId = clientId ?? _generateClientId();
+    : clientId = clientId ?? _generateClientId();
 
   final String clientId;
 
@@ -40,8 +40,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Adds a pairing from a scanned QR URL. Returns the stored pairing.
-  Future<StoredPairing> addPairingFromUrl(String url) async {
+  /// Adds a pairing from a scanned QR URL. Returns the stored pairing and
+  /// whether it already existed (re-pairing the same desktop refreshes the
+  /// credentials but keeps the user's custom name).
+  Future<({StoredPairing pairing, bool alreadyExisted})> addPairingFromUrl(
+    String url,
+  ) async {
     final credential = PairingCredential.fromUrl(url);
     if (credential == null) {
       throw FormatException('不是有效的 ZCode 远程控制链接');
@@ -61,7 +65,13 @@ class AppController extends ChangeNotifier {
     );
     await db.upsertPairing(pairing);
     await loadPairings();
-    return pairing;
+    return (
+      pairing: pairings.firstWhere(
+        (p) => p.deviceSid == pairing.deviceSid,
+        orElse: () => pairing,
+      ),
+      alreadyExisted: existing != null,
+    );
   }
 
   Future<void> renamePairing(StoredPairing pairing, String name) async {
@@ -162,15 +172,18 @@ class AppController extends ChangeNotifier {
     final workspace = _bridge?.activeWorkspace;
     if (workspace == null) return const [];
     return _workspaces
-        .where((w) =>
-            w.taskId != null &&
-            !w.archived &&
-            w.workspaceKey == workspace.workspaceKey)
+        .where(
+          (w) =>
+              w.taskId != null &&
+              !w.archived &&
+              w.workspaceKey == workspace.workspaceKey,
+        )
         .toList()
       ..sort((a, b) {
         if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
-        return (b.updatedAt ?? b.createdAt ?? 0)
-            .compareTo(a.updatedAt ?? a.createdAt ?? 0);
+        return (b.updatedAt ?? b.createdAt ?? 0).compareTo(
+          a.updatedAt ?? a.createdAt ?? 0,
+        );
       });
   }
 
@@ -184,14 +197,18 @@ class AppController extends ChangeNotifier {
     final workspace = _bridge?.activeWorkspace;
     if (workspace == null) return const [];
     return _workspaces
-        .where((w) =>
-            w.taskId != null &&
-            w.archived &&
-            w.workspaceKey == workspace.workspaceKey)
+        .where(
+          (w) =>
+              w.taskId != null &&
+              w.archived &&
+              w.workspaceKey == workspace.workspaceKey,
+        )
         .toList()
-      ..sort((a, b) =>
-          (b.updatedAt ?? b.createdAt ?? 0)
-              .compareTo(a.updatedAt ?? a.createdAt ?? 0));
+      ..sort(
+        (a, b) => (b.updatedAt ?? b.createdAt ?? 0).compareTo(
+          a.updatedAt ?? a.createdAt ?? 0,
+        ),
+      );
   }
 
   bool get sessionsIndexConnected => _bridge?.activeWorkspace != null;
@@ -293,8 +310,8 @@ class AppController extends ChangeNotifier {
     // empty logEpoch fails host validation (min 1) and a bogus revision would
     // trip optimistic-concurrency checks. Omit the base unless a real
     // snapshot supplied it.
-    final hasSnapshotBase = (state?.revision ?? 0) > 0 &&
-        (state?.logEpoch.isNotEmpty ?? false);
+    final hasSnapshotBase =
+        (state?.revision ?? 0) > 0 && (state?.logEpoch.isNotEmpty ?? false);
     return bridge.sendCommand(
       sessionId: sessionId ?? state?.sessionId,
       baseRevision: hasSnapshotBase ? state!.revision : null,
@@ -304,13 +321,15 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  Future<Map<String, Object?>> sendText(String text,
-          {String? sessionId, List<Map<String, Object?>>? attachments}) =>
-      _sendCommand('sendText', {
-        'text': text,
-        if (attachments != null && attachments.isNotEmpty)
-          'attachments': attachments,
-      }, sessionId: sessionId);
+  Future<Map<String, Object?>> sendText(
+    String text, {
+    String? sessionId,
+    List<Map<String, Object?>>? attachments,
+  }) => _sendCommand('sendText', {
+    'text': text,
+    if (attachments != null && attachments.isNotEmpty)
+      'attachments': attachments,
+  }, sessionId: sessionId);
 
   Future<Map<String, Object?>> sendGoalCommand(String text) =>
       _sendCommand('sendGoalCommand', {'text': text});
@@ -320,8 +339,7 @@ class AppController extends ChangeNotifier {
   }
 
   /// Compacts the open conversation (summarizes the history so far).
-  Future<Map<String, Object?>> compact() =>
-      _sendCommand('compact', const {});
+  Future<Map<String, Object?>> compact() => _sendCommand('compact', const {});
 
   /// Re-runs one assistant turn (`retryTurn`; target is `{rowId, entityId}`).
   Future<Map<String, Object?>> retryTurn(Map<String, Object?> target) =>
@@ -331,8 +349,7 @@ class AppController extends ChangeNotifier {
   Future<Map<String, Object?>> editUserQuery(
     Map<String, Object?> target,
     String newText,
-  ) =>
-      _sendCommand('editUserQuery', {'target': target, 'newText': newText});
+  ) => _sendCommand('editUserQuery', {'target': target, 'newText': newText});
 
   /// Collaboration mode (build / edit / plan / yolo).
   Future<Map<String, Object?>> switchCollaborationMode(String mode) =>
@@ -398,23 +415,30 @@ class AppController extends ChangeNotifier {
     await _sendCommand('resolveInteraction', {
       'interactionId': requestId,
       'answer': {
-        if (optionId != null) 'optionId': optionId,
-        if (action != null) 'action': action,
-        if (content != null) 'content': content,
+        'optionId': ?optionId,
+        'action': ?action,
+        'content': ?content,
       },
     });
   }
 
   /// Switches the open session's model (+ optional thought level) directly via
   /// the zcode-session service — no baseRevision needed.
-  Future<void> switchModel(String provider, String model,
-      {String? thoughtLevel}) async {
+  Future<void> switchModel(
+    String provider,
+    String model, {
+    String? thoughtLevel,
+  }) async {
     final service = _bridge?.sessionService;
     if (service == null) throw StateError('未连接');
     final sessionId = _conversation?.state?.sessionId;
     if (sessionId == null) throw StateError('会话未打开');
-    await service.setModel(sessionId,
-        provider: provider, model: model, thoughtLevel: thoughtLevel);
+    await service.setModel(
+      sessionId,
+      provider: provider,
+      model: model,
+      thoughtLevel: thoughtLevel,
+    );
   }
 
   /// Switches the open session's thought level (reasoning effort).
@@ -436,10 +460,10 @@ class AppController extends ChangeNotifier {
     await _sendCommand('resolveInteraction', {
       'interactionId': interactionId,
       'answer': {
-        if (optionId != null) 'optionId': optionId,
-        if (freeText != null) 'freeText': freeText,
-        if (action != null) 'action': action,
-        if (content != null) 'content': content,
+        'optionId': ?optionId,
+        'freeText': ?freeText,
+        'action': ?action,
+        'content': ?content,
       },
     });
   }
@@ -457,9 +481,11 @@ class AppController extends ChangeNotifier {
     if (service == null) throw StateError('未连接');
     final result = await service.readWorkspaceState();
     final settings = result['settings'];
-    zlog('[zremote] readWorkspaceState settings keys: '
-        '${settings is Map ? settings.keys.toList() : null} '
-        'mode=${settings is Map ? settings['mode'] : null}');
+    zlog(
+      '[zremote] readWorkspaceState settings keys: '
+      '${settings is Map ? settings.keys.toList() : null} '
+      'mode=${settings is Map ? settings['mode'] : null}',
+    );
     final config = SessionModelConfig.fromSettings(
       settings is Map<String, Object?> ? settings : null,
     );
@@ -492,9 +518,11 @@ class AppController extends ChangeNotifier {
           '${o.id}=${o.currentValue}'
               '(${o.options.length} opts)',
       ].join('; ');
-      zlog('[zremote] prepareWorkspace: ${prep.configOptions.length} '
-          'config options [$opts], '
-          '${prep.slashCommands.length} slash commands');
+      zlog(
+        '[zremote] prepareWorkspace: ${prep.configOptions.length} '
+        'config options [$opts], '
+        '${prep.slashCommands.length} slash commands',
+      );
       return prep;
     } catch (e) {
       zlog('[zremote] prepareWorkspace failed: $e');
@@ -555,7 +583,10 @@ class AppController extends ChangeNotifier {
     return current;
   }
 
-  Future<void> createSession(
+  /// Creates a session and returns the new sessionId when the command result
+  /// carries one (null when the host's acceptance frame omits it — the new
+  /// session still shows up in the list on the next workspace-list refresh).
+  Future<String?> createSession(
     String firstInput, {
     String? provider,
     String? model,
@@ -564,7 +595,7 @@ class AppController extends ChangeNotifier {
     String? followupMode,
   }) async {
     final workspace = _bridge?.activeWorkspace;
-    if (workspace == null) return;
+    if (workspace == null) return null;
     final result = await _sendCommand('createSession', {
       'workspaceId': workspace.workspaceKey,
       'firstInput': {'text': firstInput},
@@ -578,17 +609,18 @@ class AppController extends ChangeNotifier {
           mode != null ||
           followupMode != null)
         'config': {
-          if (provider != null) 'provider': provider,
-          if (model != null) 'model': model,
-          if (thoughtLevel != null) 'thought': thoughtLevel,
-          if (mode != null) 'mode': mode,
-          if (followupMode != null) 'followupMode': followupMode,
+          'provider': ?provider,
+          'model': ?model,
+          'thought': ?thoughtLevel,
+          'mode': ?mode,
+          'followupMode': ?followupMode,
         },
     });
     // The RPC returning OK only means the host accepted the frame — the
     // command result carries status/result.type (e.g. accepted+createSession
     // with the new sessionId, or a fault). Log it so silent drops are visible.
     debugPrint('[zremote] createSession result: $result');
+    return extractSessionIdFromResult(result);
   }
 
   Future<void> renameSession(String sessionId, String title) async {
@@ -669,8 +701,9 @@ class AppController extends ChangeNotifier {
   /// still fires when the response eventually lands.
   Future<void> refreshSessions() async {
     try {
-      await _bridge?.refreshWorkspaceList()
-          .timeout(const Duration(seconds: 10));
+      await _bridge?.refreshWorkspaceList().timeout(
+        const Duration(seconds: 10),
+      );
     } catch (_) {
       notifyListeners();
     }
@@ -688,13 +721,14 @@ class AppController extends ChangeNotifier {
     String? provider,
     String? model,
     String? thoughtLevel,
-  }) =>
-      db.saveWorkspaceModelPrefs(WorkspaceModelPrefs(
-        workspaceKey: workspaceKey,
-        provider: provider,
-        model: model,
-        thoughtLevel: thoughtLevel,
-      ));
+  }) => db.saveWorkspaceModelPrefs(
+    WorkspaceModelPrefs(
+      workspaceKey: workspaceKey,
+      provider: provider,
+      model: model,
+      thoughtLevel: thoughtLevel,
+    ),
+  );
 
   Future<void> clearWorkspaceModelPrefs(String workspaceKey) =>
       db.clearWorkspaceModelPrefs(workspaceKey);
@@ -711,6 +745,22 @@ class AppController extends ChangeNotifier {
   /// Set by the notification tap handler: `workspaceKey|sessionId` to open
   /// once a connection is up. Consumed by [consumePendingDeepLink].
   String? pendingDeepLink;
+
+  /// Notification taps while the app is running (any page): the raw link is
+  /// both stored for the next connect and broadcast so the UI layer can
+  /// navigate immediately when already connected.
+  final _deepLinkController = StreamController<String>.broadcast();
+  Stream<String> get deepLinkStream => _deepLinkController.stream;
+
+  void requestDeepLink(String raw) {
+    pendingDeepLink = raw;
+    if (!_deepLinkController.isClosed) _deepLinkController.add(raw);
+  }
+
+  /// Drops a pending deep link without acting on it (e.g. the connection
+  /// attempt that was supposed to serve it failed — the link must not fire
+  /// on some later unrelated connect).
+  void discardPendingDeepLink() => pendingDeepLink = null;
 
   final Set<String> _notifiedInteractions = {};
   String? _lastNotifiedPhase;
@@ -745,10 +795,7 @@ class AppController extends ChangeNotifier {
           DateTime.now().difference(last) > _stallThreshold &&
           !_stallNotified) {
         _stallNotified = true;
-        hook({
-          'type': 'stall',
-          'sessionId': state.sessionId,
-        });
+        hook({'type': 'stall', 'sessionId': state.sessionId});
       }
     });
   }
@@ -852,4 +899,28 @@ class AppController extends ChangeNotifier {
   }
 
   static String _generateClientId() => ids.newClientId();
+
+  @override
+  void dispose() {
+    unawaited(_deepLinkController.close());
+    super.dispose();
+  }
+}
+
+/// Defensive sessionId extraction from a createSession command result: host
+/// builds have returned it at `result.sessionId`, `result.result.sessionId`,
+/// or `result.taskId`.
+String? extractSessionIdFromResult(Map<String, Object?> result) {
+  String? pick(Map<String, Object?> m, String key) {
+    final v = m[key];
+    return v is String && v.isNotEmpty ? v : null;
+  }
+
+  final direct = pick(result, 'sessionId') ?? pick(result, 'taskId');
+  if (direct != null) return direct;
+  final nested = result['result'];
+  if (nested is Map<String, Object?>) {
+    return pick(nested, 'sessionId') ?? pick(nested, 'taskId');
+  }
+  return null;
 }
