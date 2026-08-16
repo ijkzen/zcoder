@@ -30,6 +30,12 @@ class ModelConfigSheet extends StatefulWidget {
   final String? currentMode;
   final Future<void> Function(String mode)? onModeChanged;
 
+  /// Followup-mode chips (queue/guide) — how messages sent while the agent
+  /// runs are handled. Only shown when [onFollowupChanged] is provided.
+  final List<String> followupOptions;
+  final String? currentFollowup;
+  final Future<void> Function(String mode)? onFollowupChanged;
+
   /// When true every selection is disabled (e.g. the agent is running —
   /// session-level rewrites wait until it stops). The sheet stays open for
   /// browsing, with [lockedReason] shown as a banner.
@@ -45,6 +51,9 @@ class ModelConfigSheet extends StatefulWidget {
     this.modeOptions = const ['build', 'edit', 'plan', 'yolo'],
     this.currentMode,
     this.onModeChanged,
+    this.followupOptions = const ['queue', 'guide'],
+    this.currentFollowup,
+    this.onFollowupChanged,
     this.locked = false,
     this.lockedReason,
   });
@@ -74,6 +83,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
   /// Locally selected collaboration mode (optimistic: the chip highlights
   /// immediately; the caller persists via onModeChanged).
   String? _mode;
+
+  /// Locally selected followup mode (same optimistic pattern).
+  String? _followupMode;
 
   List<_ProviderGroup> get _providers {
     final byProvider = <String, List<ModelOption>>{};
@@ -238,7 +250,21 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                 label: '协作模式',
                 options: widget.modeOptions,
                 current: widget.currentMode,
+                local: _mode,
+                onLocalSelect: (mode) => setState(() => _mode = mode),
                 onChanged: widget.onModeChanged,
+              ),
+            ],
+            if (widget.onFollowupChanged != null) ...[
+              const SizedBox(height: 6),
+              _modeChips(
+                label: '跟随模式',
+                options: widget.followupOptions,
+                current: widget.currentFollowup,
+                local: _followupMode,
+                onLocalSelect: (mode) => setState(() => _followupMode = mode),
+                labels: const {'queue': '排队', 'guide': '引导'},
+                onChanged: widget.onFollowupChanged,
               ),
             ],
             const SizedBox(height: 8),
@@ -281,17 +307,22 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
     return providerId;
   }
 
-  /// One chip row (collaboration mode). Applies immediately (optimistic
-  /// selection); failures surface via the caller's snackbar.
+  /// One chip row (collaboration / followup mode). Applies immediately
+  /// (optimistic selection); failures surface via the caller's snackbar.
+  /// [local] is the row's own optimistic override, [onLocalSelect] updates it.
+  /// [labels] optionally maps mode values to display text.
   Widget _modeChips({
     required String label,
     required List<String> options,
     required String? current,
+    String? local,
+    void Function(String)? onLocalSelect,
     Future<void> Function(String mode)? onChanged,
+    Map<String, String>? labels,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final handler = onChanged;
-    final selectedMode = _mode ?? current;
+    final selectedMode = local ?? current;
     return Row(
       children: [
         Text(
@@ -308,7 +339,7 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
             children: [
               for (final mode in options)
                 ChoiceChip(
-                  label: Text(mode),
+                  label: Text(labels?[mode] ?? mode),
                   selected: mode == selectedMode,
                   visualDensity: VisualDensity.compact,
                   onSelected:
@@ -320,7 +351,7 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                       : (selected) async {
                           setState(() {
                             _busy = true;
-                            _mode = mode;
+                            onLocalSelect?.call(mode);
                           });
                           try {
                             await handler(mode);

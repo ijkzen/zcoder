@@ -679,6 +679,10 @@ class ConversationSnapshot {
   final Map<String, Object?>? inputRouting;
   final Map<String, Object?>? meta;
   final Map<String, Object?>? config;
+  /// Held queue (`{items: [{queueItemId, text, …}], autoDrain,
+  /// pauseReason?}`). Items other than queueItemId/text are passed through
+  /// verbatim — the client only reads those two keys.
+  final Map<String, Object?>? queue;
   final List<Map<String, Object?>> pendingInteractions;
   final List<Map<String, Object?>> pendingCommands;
   final List<ConversationRow> rows;
@@ -695,6 +699,7 @@ class ConversationSnapshot {
     this.inputRouting,
     this.meta,
     this.config,
+    this.queue,
     required this.pendingInteractions,
     required this.pendingCommands,
     required this.rows,
@@ -739,6 +744,9 @@ class ConversationSnapshot {
           : null,
       config: json['config'] is Map<String, Object?>
           ? json['config'] as Map<String, Object?>
+          : null,
+      queue: json['queue'] is Map<String, Object?>
+          ? json['queue'] as Map<String, Object?>
           : null,
       pendingInteractions: interactions,
       pendingCommands: pendingCommands,

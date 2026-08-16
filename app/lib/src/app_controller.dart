@@ -296,8 +296,45 @@ class AppController extends ChangeNotifier {
 
   // ---------- Commands ----------
 
+  /// Commands that require `baseRevision` (CAS — mirrors the reference
+  /// client's `_casCommands`). The runtime rejects a stale base for these;
+  /// non-CAS commands (sendText/stop/…) carry no base at all.
+  static const _casCommands = {
+    'applyFileRewind',
+    'forkAssistant',
+    'editUserQuery',
+    'retryTurn',
+    'setAssistantFeedback',
+    'sendQueuedNow',
+    'editQueueItem',
+    'reorderQueueItem',
+    'deleteQueueItem',
+    'setAutoDrain',
+    'switchModelConfig',
+    'switchCollaborationMode',
+    'setFollowupMode',
+    'pauseGoal',
+    'resumeGoal',
+  };
+
+  /// Row-target commands that also require `baseLogEpoch`.
+  static const _rowTargetCommands = {
+    'applyFileRewind',
+    'forkAssistant',
+    'editUserQuery',
+    'retryTurn',
+    'setAssistantFeedback',
+  };
+
+  /// Highest revision seen from command acks (`revisionAtDecision`) — acks
+  /// land before the follow-up `state.updated` frame, and the next CAS
+  /// command must not go stale (mirrors the reference client).
+  final _ackedRevisions = <String, int>{};
+
   /// Sends a conversation command against the open conversation, attaching
-  /// its revision/logEpoch as the base for optimistic concurrency.
+  /// its revision/logEpoch as the base for optimistic concurrency (CAS
+  /// commands only). Tracks the server's `revisionAtDecision` from each ack
+  /// and retries once on `stale` with the reported revision.
   Future<Map<String, Object?>> _sendCommand(
     String type,
     Map<String, Object?> payload, {
@@ -306,33 +343,77 @@ class AppController extends ChangeNotifier {
     final bridge = _bridge;
     if (bridge == null) throw StateError('未连接');
     final state = _conversation?.state;
-    // Without event push the snapshot's revision/logEpoch never arrive; an
-    // empty logEpoch fails host validation (min 1) and a bogus revision would
-    // trip optimistic-concurrency checks. Omit the base unless a real
-    // snapshot supplied it.
-    final hasSnapshotBase =
-        (state?.revision ?? 0) > 0 && (state?.logEpoch.isNotEmpty ?? false);
-    return bridge.sendCommand(
-      sessionId: sessionId ?? state?.sessionId,
-      baseRevision: hasSnapshotBase ? state!.revision : null,
-      baseLogEpoch: hasSnapshotBase ? state!.logEpoch : null,
+    final sid = sessionId ?? state?.sessionId;
+    final snapshotRev = state?.revision ?? 0;
+    final ackedRev = sid == null ? 0 : (_ackedRevisions[sid] ?? 0);
+    final baseRevision = _casCommands.contains(type)
+        ? (snapshotRev > ackedRev ? snapshotRev : ackedRev)
+        : 0;
+    final hasLogEpoch = (state?.logEpoch.isNotEmpty ?? false);
+    final baseLogEpoch = (_rowTargetCommands.contains(type) && hasLogEpoch)
+        ? state!.logEpoch
+        : null;
+
+    Future<Map<String, Object?>> send(int revision) => bridge.sendCommand(
+      sessionId: sid,
+      baseRevision: revision > 0 ? revision : null,
+      baseLogEpoch: baseLogEpoch,
       type: type,
       payload: payload,
     );
+
+    var result = await send(baseRevision);
+    final ackRev = result['revisionAtDecision'];
+    if (sid != null && ackRev is num) {
+      final serverRev = ackRev.toInt();
+      final status = result['status'];
+      // revisionAtDecision is the base at decision time; an accepted
+      // command bumps the revision by one, so the next CAS base is +1.
+      final floor =
+          (status == 'accepted' ||
+                  status == 'noop' ||
+                  status == 'duplicate')
+          ? serverRev + 1
+          : serverRev;
+      if (floor > (_ackedRevisions[sid] ?? 0)) {
+        _ackedRevisions[sid] = floor;
+      }
+    }
+    if (sid != null && result['status'] == 'stale' && ackRev is num) {
+      // Retry once at the server's current revision (fresh commandId is
+      // generated inside bridge.sendCommand).
+      result = await send(ackRev.toInt());
+    }
+    return result;
   }
 
   Future<Map<String, Object?>> sendText(
     String text, {
     String? sessionId,
     List<Map<String, Object?>>? attachments,
+    String? heldQueueDisposition,
+    List<String>? expectedHeldQueueItemIds,
   }) => _sendCommand('sendText', {
     'text': text,
     if (attachments != null && attachments.isNotEmpty)
       'attachments': attachments,
+    'heldQueueDisposition': ?heldQueueDisposition,
+    if (expectedHeldQueueItemIds != null &&
+        expectedHeldQueueItemIds.isNotEmpty)
+      'expectedHeldQueueItemIds': expectedHeldQueueItemIds,
   }, sessionId: sessionId);
 
-  Future<Map<String, Object?>> sendGoalCommand(String text) =>
-      _sendCommand('sendGoalCommand', {'text': text});
+  Future<Map<String, Object?>> sendGoalCommand(
+    String text, {
+    String? heldQueueDisposition,
+    List<String>? expectedHeldQueueItemIds,
+  }) => _sendCommand('sendGoalCommand', {
+    'text': text,
+    'heldQueueDisposition': ?heldQueueDisposition,
+    if (expectedHeldQueueItemIds != null &&
+        expectedHeldQueueItemIds.isNotEmpty)
+      'expectedHeldQueueItemIds': expectedHeldQueueItemIds,
+  });
 
   Future<void> stop() async {
     await _sendCommand('stop', const {});
@@ -358,6 +439,38 @@ class AppController extends ChangeNotifier {
   /// Followup mode (queue / guide).
   Future<Map<String, Object?>> setFollowupMode(String mode) =>
       _sendCommand('setFollowupMode', {'mode': mode});
+
+  /// Sends one queued message immediately, jumping the queue (doc 08 §2.4).
+  Future<Map<String, Object?>> sendQueuedNow(String queueItemId) =>
+      _sendCommand('sendQueuedNow', {'queueItemId': queueItemId});
+
+  /// Edits the text of one queued message.
+  Future<Map<String, Object?>> editQueueItem(
+    String queueItemId,
+    String newText,
+  ) => _sendCommand('editQueueItem', {
+    'queueItemId': queueItemId,
+    'newText': newText,
+  });
+
+  /// Deletes one queued message.
+  Future<Map<String, Object?>> deleteQueueItem(String queueItemId) =>
+      _sendCommand('deleteQueueItem', {'queueItemId': queueItemId});
+
+  /// Moves one queued message before another (`beforeQueueItemId` empty moves
+  /// it to the front).
+  Future<Map<String, Object?>> reorderQueueItem(
+    String queueItemId,
+    String beforeQueueItemId,
+  ) => _sendCommand('reorderQueueItem', {
+    'queueItemId': queueItemId,
+    'beforeQueueItemId': beforeQueueItemId,
+  });
+
+  /// Auto-drain switch: when off, messages sent while the agent runs hold in
+  /// the queue instead of executing.
+  Future<Map<String, Object?>> setAutoDrain(bool autoDrain) =>
+      _sendCommand('setAutoDrain', {'autoDrain': autoDrain});
 
   /// Pauses the session's goal (goal mode; errors if none is running).
   Future<Map<String, Object?>> pauseGoal() =>

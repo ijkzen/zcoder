@@ -58,4 +58,4 @@ _Avoid_: initial load, 全量/增量
 
 ## Boundary
 
-Out of scope for v1: usage/billing UI, browser control, terminal panel (xterm), Z.AI account login. The conversation UI is the product. Model provider management (model-provider channel) and model/thought selection for new sessions are in scope (added 2026-08-16); held-queue management is deferred until event push delivers queue state.
+Out of scope for v1: usage/billing UI, browser control, terminal panel (xterm), Z.AI account login. The conversation UI is the product. Model provider management (model-provider channel) and model/thought selection for new sessions are in scope (added 2026-08-16). Held-queue management (排队消息) is implemented per docs/protocol/08-held-queue-integration.md (added 2026-08-17): queue state rides the snapshot/state.updated event channel with a rowsRange-inline fallback; whether the desktop actually delivers queue to terminal connections is still pending on-device verification (TC-CONV-101).

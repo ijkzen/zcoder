@@ -46,11 +46,13 @@ class TopicSession {
   final RpcChannel _channel;
   final String clientId;
   final String workspaceKey;
+  final String? workspaceIdentity;
 
   TopicSession(
     this._channel, {
     required this.clientId,
     required this.workspaceKey,
+    this.workspaceIdentity,
   });
 
   final _conversationFrames = StreamController<TopicFrame>.broadcast();
@@ -70,9 +72,16 @@ class TopicSession {
   String? _connectionId;
   String? get connectionId => _connectionId;
 
-  Map<String, Object?> _listenArgs() => {
+  /// Minimal workspace scope for the **conversation** subscription path.
+  /// Matches the reference client (zemote) exactly — the desktop derives the
+  /// connection identity itself from the relay connection, so sending
+  /// `connectionId`/`runtimePolicy` here breaks frame delivery (E2E-verified
+  /// 2026-08-17: zemote receives conversation frames with this shape, zcoder
+  /// did not while sending the extra fields; doc 08 §3.2).
+  Map<String, Object?> get _conversationScope => {
     'workspacePath': workspaceKey,
-    if (_connectionId != null) 'connectionId': _connectionId,
+    if (workspaceIdentity != null && workspaceIdentity!.isNotEmpty)
+      'workspaceIdentity': workspaceIdentity,
   };
 
   StreamSubscription<Object?>? _conversationEventSub;
@@ -100,13 +109,13 @@ class TopicSession {
       'appVersion': appVersion,
     });
     _conversationEventSub = _channel
-        .listen('onDynamicConversationFrame', _listenArgs())
+        .listen('onDynamicConversationFrame', _conversationScope)
         .listen(_dispatch(_conversationFrames));
     _sessionsIndexEventSub = _channel
-        .listen('onDynamicSessionsIndexFrame', _listenArgs())
+        .listen('onDynamicSessionsIndexFrame', _conversationScope)
         .listen(_dispatch(_sessionsIndexFrames));
     _workspaceConfigEventSub = _channel
-        .listen('onDynamicWorkspaceConfigFrame', _listenArgs())
+        .listen('onDynamicWorkspaceConfigFrame', _conversationScope)
         .listen(_dispatch(_workspaceConfigFrames));
     return helloRaw is Map<String, Object?> ? helloRaw : const {};
   }
@@ -130,13 +139,13 @@ class TopicSession {
     };
   }
 
-  // Subscribe shape: workspace target + runtime policy + the hello
-  // connectionId (the host forwards it as the trusted connection for the
-  // runtime-side subscription — without it the runtime never pushes).
+  // Subscribe shape for sessions-index / workspace-config: workspace target +
+  // runtime policy (the reference client sends `existing-only` here too).
   Map<String, Object?> _subscribeFields(String visibility) => {
     'workspacePath': workspaceKey,
+    if (workspaceIdentity != null && workspaceIdentity!.isNotEmpty)
+      'workspaceIdentity': workspaceIdentity,
     'runtimePolicy': 'existing-only',
-    if (_connectionId != null) 'connectionId': _connectionId,
     if (visibility != 'foreground') 'visibility': visibility,
   };
 
@@ -146,7 +155,7 @@ class TopicSession {
     String visibility = 'foreground',
   }) async {
     final raw = await _channel.call('subscribeConversationV4', {
-      ..._subscribeFields(visibility),
+      ..._conversationScope,
       'sessionId': sessionId,
     });
     final ack = tryParseAck(raw);
@@ -181,7 +190,7 @@ class TopicSession {
     int? seq,
   }) async {
     await _channel.call('resyncConversationV4', {
-      ..._subscribeFields('foreground'),
+      ..._conversationScope,
       'sessionId': sessionId,
       'subscriptionId': subscriptionId,
       'base': logEpoch == null ? null : {'logEpoch': logEpoch, 'seq': seq ?? 0},
@@ -223,7 +232,7 @@ class TopicSession {
     String subscriptionId,
   ) async {
     await _channel.call('unsubscribeConversationV4', {
-      'workspacePath': workspaceKey,
+      ..._conversationScope,
       'sessionId': sessionId,
       'subscriptionId': subscriptionId,
     });
@@ -266,8 +275,7 @@ class TopicSession {
   /// `envelope` key with the workspace target alongside.
   Future<Map<String, Object?>> sendCommand(Map<String, Object?> command) async {
     final raw = await _channel.call('sendConversationCommandV4', {
-      'workspacePath': workspaceKey,
-      'workspace': {'workspacePath': workspaceKey},
+      ..._conversationScope,
       'envelope': command,
     });
     return raw is Map<String, Object?> ? raw : const {};

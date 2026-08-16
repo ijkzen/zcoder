@@ -298,6 +298,7 @@ class BridgeManager {
       rpc.channel(agentChannelName),
       clientId: clientId,
       workspaceKey: workspaceKey,
+      workspaceIdentity: _activeWorkspace?.workspaceIdentity,
     );
     _rpc?.dispose();
     _topicSession?.dispose();

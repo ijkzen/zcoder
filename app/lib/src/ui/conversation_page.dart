@@ -131,18 +131,42 @@ class _ConversationPageState extends State<ConversationPage> {
   Future<void> _send() async {
     final text = _inputController.text.trim();
     if (text.isEmpty && _attachments.isEmpty) return;
+    // inputRouting.mode == 'choice' means the user picks: keep the queue and
+    // append this message, or clear the queue and jump it in. Only asked when
+    // the queue is non-empty (matches the web client & zemote, doc 08 §2.2).
+    final state = _state;
+    String? heldDisposition;
+    if (state != null &&
+        state.inputRoutingMode == 'choice' &&
+        state.queueItems.isNotEmpty) {
+      heldDisposition = await _askHeldQueueDisposition();
+      if (heldDisposition == null) return; // user cancelled
+    }
     setState(() => _sending = true);
     try {
       // The desktop may be mid-restart (runtime respawns after relay
       // reconnect); a timeout keeps the send button from staying disabled.
-      await widget.app
+      final result = await widget.app
           .sendText(
             text,
             attachments: _attachments.isEmpty
                 ? null
                 : List<Map<String, Object?>>.from(_attachments),
+            heldQueueDisposition: heldDisposition,
           )
           .timeout(const Duration(seconds: 15));
+      // A rejected ack (e.g. inputRouting.mode == 'reject') carries a
+      // reasonCode — surface it instead of silently clearing the input.
+      if (result['status'] == 'rejected' && mounted) {
+        final reason = result['reasonCode']?.toString() ?? '';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              reason.isEmpty ? '消息被拒绝发送' : '消息被拒绝发送：$reason',
+            ),
+          ),
+        );
+      }
       _inputController.clear();
       _attachments.clear();
       setState(() {});
@@ -156,6 +180,30 @@ class _ConversationPageState extends State<ConversationPage> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Choice-mode dialog: queue the new message or clear the queue and send
+  /// it immediately (doc 08 §6.1).
+  Future<String?> _askHeldQueueDisposition() {
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('有排队中的消息'),
+        content: const Text('立即发送将清空排队消息并插队执行'),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop('keepQueueAndSend'),
+            child: const Text('排队发送'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop('clearQueueAndSend'),
+            child: const Text('立即发送'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _stop() async {
@@ -389,6 +437,7 @@ class _ConversationPageState extends State<ConversationPage> {
                 ),
               ),
               _buildEntriesRow(state),
+              _QueueBar(state: state, app: widget.app),
               _buildInputBar(),
             ],
           );
@@ -685,6 +734,22 @@ class _ConversationPageState extends State<ConversationPage> {
               ScaffoldMessenger.of(
                 sheetContext,
               ).showSnackBar(SnackBar(content: Text('切换模式失败：$e')));
+            }
+          }
+        },
+        followupOptions: const ['queue', 'guide'],
+        currentFollowup: state.config?['followupMode']?.toString() ?? 'queue',
+        onFollowupChanged: (mode) async {
+          // Optimistic: the chip highlights immediately; the server's
+          // state.updated frame confirms (doc 08 §6.3).
+          widget.app.conversation?.optimisticSetFollowupMode(mode);
+          try {
+            await widget.app.setFollowupMode(mode);
+          } catch (e) {
+            if (sheetContext.mounted) {
+              ScaffoldMessenger.of(
+                sheetContext,
+              ).showSnackBar(SnackBar(content: Text('切换跟随模式失败：$e')));
             }
           }
         },
@@ -2468,5 +2533,201 @@ class _TokenUsageSheet extends StatelessWidget {
       return (read / input).clamp(0.0, 1.0);
     }
     return null;
+  }
+}
+
+// ---------- Held queue bar ----------
+
+/// Queued-message panel between the message list and the input bar: shows
+/// every held message with per-item actions (send now / edit / delete) and
+/// the auto-drain switch (doc 08 §6.2). The page rebuilds on every app
+/// notify, so queue changes from `state.updated` frames render automatically.
+class _QueueBar extends StatelessWidget {
+  final ConversationState state;
+  final AppController app;
+
+  const _QueueBar({required this.state, required this.app});
+
+  @override
+  Widget build(BuildContext context) {
+    final items = state.queueItems;
+    if (items.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.queue_outlined, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                '排队消息 ${items.length}',
+                style: TextStyle(fontSize: 12, color: scheme.primary),
+              ),
+              const Spacer(),
+              // autoDrain switch (optimistic update + command).
+              InkWell(
+                onTap: () {
+                  final next = !state.autoDrain;
+                  app.conversation?.optimisticSetAutoDrain(next);
+                  app.setAutoDrain(next);
+                },
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    state.autoDrain ? '自动发送: 开' : '自动发送: 关',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${item['text'] ?? ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  _QueueAction(
+                    icon: Icons.play_arrow,
+                    tooltip: '立即发送',
+                    onTap: () {
+                      final id = '${item['queueItemId']}';
+                      app.conversation?.optimisticRemoveQueueItem(id);
+                      app.sendQueuedNow(id);
+                    },
+                  ),
+                  _QueueAction(
+                    icon: Icons.edit_outlined,
+                    tooltip: '编辑',
+                    onTap: () => _edit(context, item),
+                  ),
+                  _QueueAction(
+                    icon: Icons.close,
+                    tooltip: '删除',
+                    onTap: () => _delete(context, item),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _edit(BuildContext context, Map<String, Object?> item) async {
+    final controller = TextEditingController(text: '${item['text'] ?? ''}');
+    final text = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('编辑排队消息'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (text == null || text.isEmpty) return;
+    final id = '${item['queueItemId']}';
+    app.conversation?.optimisticUpdateQueueItemText(id, text);
+    app.editQueueItem(id, text);
+  }
+
+  Future<void> _delete(BuildContext context, Map<String, Object?> item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除排队消息？'),
+        content: Text(
+          '${item['text'] ?? ''}',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final id = '${item['queueItemId']}';
+    app.conversation?.optimisticRemoveQueueItem(id);
+    app.deleteQueueItem(id);
+  }
+}
+
+/// Compact icon action inside the queue bar.
+class _QueueAction extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _QueueAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(
+        icon,
+        size: 16,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      tooltip: tooltip,
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+    );
   }
 }

@@ -129,7 +129,13 @@ class ChannelClient {
       id,
       channel,
       method,
-      args == null ? const [] : [args],
+      // Event args are delivered to the handler as-is (no spread), unlike
+      // promise args which are spread into the method call. Wrapping here
+      // (as `[args]`) registers the listener with the wrong value — the host
+      // then keys it under a bogus workspaceKey and never routes frames to
+      // it (E2E-verified 2026-08-17: zemote/renderer pass the scope map
+      // directly and receive frames; zcoder wrapped it and got none).
+      args,
     );
     controller.onCancel = () {
       _sendCancelOrDispose(MsgType.eventDispose, id);

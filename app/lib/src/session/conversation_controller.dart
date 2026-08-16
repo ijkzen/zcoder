@@ -23,6 +23,9 @@ class ConversationState {
   Map<String, Object?>? inputRouting;
   Map<String, Object?>? meta;
   Map<String, Object?>? config;
+  /// Held queue (`{items: [{queueItemId, text, …}], autoDrain}`). Items are
+  /// passed through verbatim from the snapshot (doc 08-held-queue-integration).
+  Map<String, Object?>? queue;
   List<PendingInteraction> pendingInteractions;
   // readSession polling state (snapshot-only fields: approvals, context
   // usage and model config all come from the readSession RPC).
@@ -76,6 +79,57 @@ class ConversationState {
   bool get isAgentRunning =>
       sessionStatus == 'running' || (canStopOrNull ?? false);
 
+  // ---------- Held queue ----------
+
+  /// Queued message items, in queue order (oldest first). Each item is the
+  /// raw snapshot map; the client reads `queueItemId` and `text` only.
+  List<Map<String, Object?>> get queueItems {
+    final items = queue?['items'];
+    if (items is! List) return const [];
+    return items.whereType<Map<String, Object?>>().toList();
+  }
+
+  /// autoDrain defaults to true when the snapshot omits it (doc 08 §2.1).
+  bool get autoDrain => queue?['autoDrain'] != false;
+
+  /// `inputRouting.mode`; defaults to `startNow` (web client behavior).
+  String get inputRoutingMode => (inputRouting?['mode']?.toString()) ?? 'startNow';
+
+  /// Optimistic queue edits — applied locally after the command is accepted,
+  /// before the server's `state.updated` frame confirms (or corrects) them.
+  void removeQueueItem(String queueItemId) {
+    final q = queue;
+    if (q == null) return;
+    final items = (q['items'] as List?)
+        ?.where((i) =>
+            i is Map<String, Object?> && '${i['queueItemId']}' != queueItemId)
+        .toList();
+    queue = {...q, 'items': items ?? const []};
+  }
+
+  void updateQueueItemText(String queueItemId, String newText) {
+    final q = queue;
+    if (q == null || q['items'] is! List) return;
+    final items = [
+      for (final i in q['items'] as List)
+        if (i is Map<String, Object?> && '${i['queueItemId']}' == queueItemId)
+          {...i, 'text': newText}
+        else
+          i,
+    ];
+    queue = {...q, 'items': items};
+  }
+
+  void setAutoDrainOptimistic(bool next) {
+    final q = queue;
+    if (q == null) return;
+    queue = {...q, 'autoDrain': next};
+  }
+
+  void setFollowupModeOptimistic(String mode) {
+    config = {...?config, 'followupMode': mode};
+  }
+
   /// The parts of a readSession response the poll merges outside of
   /// settings/runtime/projection: the session's own status.
   void applyReadSession(Map<String, Object?> result) {
@@ -93,6 +147,7 @@ class ConversationState {
     inputRouting = snapshot.inputRouting;
     meta = snapshot.meta;
     config = snapshot.config;
+    queue = snapshot.queue;
     pendingInteractions = snapshot.pendingInteractions
         .map(PendingInteraction.fromJson)
         .toList();
@@ -142,21 +197,35 @@ class ConversationState {
       case 'state.updated':
         final patch = op['patch'];
         if (patch is Map<String, Object?>) {
-          _applyControlPatch(patch);
+          _applyStatePatch(patch);
         }
     }
   }
 
-  void _applyControlPatch(Map<String, Object?> patch) {
-    final merged = Map<String, Object?>.from(control);
+  /// A `state.updated` patch is a partial update of **top-level** snapshot
+  /// fields (queue / inputRouting / meta / config / availability / control),
+  /// not a bag of keys to merge into `control` (doc 08 §2.1, §4.3).
+  void _applyStatePatch(Map<String, Object?> patch) {
     patch.forEach((k, v) {
-      if (v is Map<String, Object?> && merged[k] is Map<String, Object?>) {
-        merged[k] = {...merged[k] as Map<String, Object?>, ...v};
-      } else {
-        merged[k] = v;
+      switch (k) {
+        case 'control':
+          // Partial control object: deep-merge, keeping existing
+          // phase/canStop/… keys not present in this patch.
+          if (v is Map<String, Object?>) {
+            control = {...control, ...v};
+          }
+        case 'queue':
+          queue = v is Map<String, Object?> ? v : null;
+        case 'inputRouting':
+          inputRouting = v is Map<String, Object?> ? v : null;
+        case 'meta':
+          meta = v is Map<String, Object?> ? v : null;
+        case 'config':
+          config = v is Map<String, Object?> ? v : null;
+        case 'availability':
+          availability = v is Map<String, Object?> ? v : null;
       }
     });
-    control = merged;
   }
 }
 
@@ -322,6 +391,37 @@ class ConversationController {
     }
   }
 
+  /// Optimistic queue edits. The UI applies these immediately (the controller
+  /// notifies via _emit); the server's next `state.updated` frame confirms or
+  /// corrects them, so a rejected command needs no explicit rollback.
+  void optimisticRemoveQueueItem(String queueItemId) {
+    final state = _state;
+    if (state == null) return;
+    state.removeQueueItem(queueItemId);
+    _emit();
+  }
+
+  void optimisticUpdateQueueItemText(String queueItemId, String newText) {
+    final state = _state;
+    if (state == null) return;
+    state.updateQueueItemText(queueItemId, newText);
+    _emit();
+  }
+
+  void optimisticSetAutoDrain(bool next) {
+    final state = _state;
+    if (state == null) return;
+    state.setAutoDrainOptimistic(next);
+    _emit();
+  }
+
+  void optimisticSetFollowupMode(String mode) {
+    final state = _state;
+    if (state == null) return;
+    state.setFollowupModeOptimistic(mode);
+    _emit();
+  }
+
   /// Pulls the live snapshot-ish state via readSession: pending requests
   /// (approvals + AskUserQuestion), context usage, and the session's model /
   /// thought level. Runs alongside the rows poll because event push does not
@@ -416,6 +516,10 @@ class ConversationController {
       if (control is Map<String, Object?>) state.control = control;
       final meta = result['meta'];
       if (meta is Map<String, Object?>) state.meta = meta;
+      // Some host builds also inline the held queue here; when absent the
+      // queue still arrives via event push (doc 08 §3.3).
+      final queue = result['queue'];
+      if (queue is Map<String, Object?>) state.queue = queue;
       final interactions = result['pendingInteractions'];
       if (interactions is List) {
         state.pendingInteractions = interactions
