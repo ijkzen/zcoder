@@ -9,10 +9,7 @@ ThemeData buildTheme(Brightness brightness) {
     brightness: brightness,
     dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
   );
-  final base = ThemeData(
-    useMaterial3: true,
-    colorScheme: scheme,
-  );
+  final base = ThemeData(useMaterial3: true, colorScheme: scheme);
   return base.copyWith(
     scaffoldBackgroundColor: scheme.surface,
     appBarTheme: AppBarTheme(

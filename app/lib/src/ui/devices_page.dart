@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_controller.dart';
 import '../bridge/bridge_manager.dart';
 import '../storage/app_database.dart';
-import 'conversation_page.dart';
+import 'deep_link.dart';
 import 'scan_page.dart';
 import 'workspaces_page.dart';
 import 'model_providers_page.dart';
@@ -25,30 +25,45 @@ class _DevicesPageState extends State<DevicesPage> {
   bool _scanning = false;
   bool _connecting = false;
 
+  /// Incremented on every connect attempt; a superseded attempt (the user
+  /// tapped another device mid-connect) must not report failures or clear the
+  /// spinner of the attempt that replaced it.
+  int _connectGen = 0;
+
   Future<void> _scan() async {
     if (_scanning) return;
     setState(() => _scanning = true);
     try {
-      final raw = await Navigator.of(context).push<String>(
-        MaterialPageRoute(builder: (_) => const ScanPage()),
-      );
+      final raw = await Navigator.of(
+        context,
+      ).push<String>(MaterialPageRoute(builder: (_) => const ScanPage()));
       if (raw == null || raw.isEmpty || !mounted) return;
-      try {
-        final pairing = await widget.app.addPairingFromUrl(raw);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('已配对：${pairing.displayName}'),
-          ));
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('配对失败：$e')),
-          );
-        }
-      }
+      await _pairFromUrl(raw);
     } finally {
       if (mounted) setState(() => _scanning = false);
+    }
+  }
+
+  Future<void> _pairFromUrl(String url) async {
+    try {
+      final result = await widget.app.addPairingFromUrl(url);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.alreadyExisted
+                  ? '该设备已配对过：${result.pairing.displayName}'
+                  : '已配对：${result.pairing.displayName}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('配对失败：$e')));
+      }
     }
   }
 
@@ -79,31 +94,34 @@ class _DevicesPageState extends State<DevicesPage> {
       ),
     );
     if (url == null || url.trim().isEmpty) return;
-    try {
-      final pairing = await widget.app.addPairingFromUrl(url.trim());
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已配对：${pairing.displayName}')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('配对失败：$e')),
-        );
-      }
-    }
+    await _pairFromUrl(url.trim());
   }
 
   Future<void> _connect(StoredPairing pairing) async {
+    // Tapping the already-connected device skips the reconnect entirely.
+    final isActive =
+        widget.app.activePairing?.id == pairing.id &&
+        widget.app.phase != BridgePhase.idle &&
+        widget.app.phase != BridgePhase.failed;
+    if (isActive) {
+      if (widget.app.phase == BridgePhase.ready) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => WorkspacesPage(app: widget.app)),
+        );
+      }
+      return;
+    }
+    final gen = ++_connectGen;
     setState(() => _connecting = true);
     try {
       await widget.app.connectTo(pairing);
       // Wait for the pairing to complete (workspace list available). The
       // bridge only reaches `ready` after the user picks a workspace.
+      final bridge = widget.app.bridge;
+      if (bridge == null) return;
       final completer = Completer<void>();
       late final StreamSubscription<BridgePhase> sub;
-      sub = widget.app.bridge!.phaseStream.listen((p) {
+      sub = bridge.phaseStream.listen((p) {
         if (p == BridgePhase.pairing && !completer.isCompleted) {
           completer.complete();
         }
@@ -116,61 +134,36 @@ class _DevicesPageState extends State<DevicesPage> {
       } finally {
         await sub.cancel();
       }
-      if (!mounted) return;
+      if (!mounted || gen != _connectGen) return;
       // A notification tap may have asked us to open a specific session —
       // jump straight to it instead of the workspace list.
       final deepLink = widget.app.consumePendingDeepLink();
       if (deepLink != null) {
-        final (workspaceKey, sessionId) = deepLink;
-        final workspace = widget.app.workspaces
-            .where((w) => w.workspaceKey == workspaceKey)
-            .firstOrNull;
-        if (workspace != null) {
-          await widget.app.selectWorkspace(workspace);
-          if (!mounted || widget.app.phase != BridgePhase.ready) return;
-          await Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) =>
-                ConversationPage(app: widget.app, sessionId: sessionId),
-          ));
-          return;
-        }
+        await handleDeepLink(widget.app, '${deepLink.$1}|${deepLink.$2}');
+        return;
       }
-      await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => WorkspacesPage(app: widget.app),
-      ));
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => WorkspacesPage(app: widget.app)),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('连接失败：$e')),
-        );
+      // A failed connect must not leave a stale deep link behind — it would
+      // otherwise fire on some later unrelated successful connect.
+      widget.app.discardPendingDeepLink();
+      if (mounted && gen == _connectGen) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('连接失败：$e')));
       }
     } finally {
-      if (mounted) setState(() => _connecting = false);
+      if (mounted && gen == _connectGen) setState(() => _connecting = false);
     }
   }
 
   Future<void> _rename(StoredPairing pairing) async {
-    final controller = TextEditingController(text: pairing.displayName);
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('重命名设备'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '设备名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+      builder: (dialogContext) =>
+          _RenameDeviceDialog(initialName: pairing.displayName),
     );
     if (name != null && name.trim().isNotEmpty) {
       await widget.app.renamePairing(pairing, name.trim());
@@ -205,13 +198,15 @@ class _DevicesPageState extends State<DevicesPage> {
             onSelected: (value) {
               switch (value) {
                 case 'providers':
-                  Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => ModelProvidersPage(app: widget.app),
-                  ));
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ModelProvidersPage(app: widget.app),
+                    ),
+                  );
                 case 'logs':
-                  Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => const ProtocolLogPage(),
-                  ));
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ProtocolLogPage()),
+                  );
               }
             },
             itemBuilder: (context) => const [
@@ -249,12 +244,12 @@ class _DevicesPageState extends State<DevicesPage> {
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
             itemCount: widget.app.pairings.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (context, i) {
               final pairing = widget.app.pairings[i];
               final isActive =
                   widget.app.activePairing?.id == pairing.id &&
-                      widget.app.phase != BridgePhase.idle;
+                  widget.app.phase != BridgePhase.idle;
               return Card(
                 child: ListTile(
                   leading: CircleAvatar(
@@ -272,14 +267,14 @@ class _DevicesPageState extends State<DevicesPage> {
                   subtitle: Text(
                     isActive
                         ? _phaseLabel(widget.app.phase)
-                        : '${pairing.deviceName ?? pairing.deviceSid}',
+                        : pairing.deviceName ?? pairing.deviceSid,
                     style: TextStyle(
                       color: isActive
                           ? Theme.of(context).colorScheme.primary
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  onTap: _connecting ? null : () => _connect(pairing),
+                  onTap: () => _connect(pairing),
                   onLongPress: () => _rename(pairing),
                   trailing: PopupMenuButton<String>(
                     onSelected: (v) async {
@@ -333,10 +328,7 @@ class _EmptyState extends StatelessWidget {
         children: [
           Icon(Icons.qr_code_2, size: 72, color: scheme.outline),
           const SizedBox(height: 16),
-          Text(
-            '还没有配对的设备',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+          Text('还没有配对的设备', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
             '在桌面端 ZCode 打开「Web 远程控制」\n然后用手机扫描二维码',
@@ -345,6 +337,77 @@ class _EmptyState extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Rename dialog that refuses blank names by keeping 保存 disabled (owns its
+/// controller in State so disposal happens after the TextField unmounts).
+class _RenameDeviceDialog extends StatefulWidget {
+  final String initialName;
+  const _RenameDeviceDialog({required this.initialName});
+
+  @override
+  State<_RenameDeviceDialog> createState() => _RenameDeviceDialogState();
+}
+
+class _RenameDeviceDialogState extends State<_RenameDeviceDialog> {
+  late final _controller = TextEditingController(text: widget.initialName);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('重命名设备'),
+      content: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: _controller,
+        builder: (context, value, _) {
+          final blank = value.text.trim().isEmpty;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _controller,
+                autofocus: true,
+                decoration: const InputDecoration(hintText: '设备名称'),
+                onSubmitted: (_) {
+                  if (!blank) Navigator.of(context).pop(_controller.text);
+                },
+              ),
+              if (blank) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '名称不能为空',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _controller,
+          builder: (context, value, _) => FilledButton(
+            onPressed: value.text.trim().isEmpty
+                ? null
+                : () => Navigator.of(context).pop(_controller.text),
+            child: const Text('保存'),
+          ),
+        ),
+      ],
     );
   }
 }

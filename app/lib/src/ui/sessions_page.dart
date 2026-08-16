@@ -61,8 +61,9 @@ class _SessionsPageState extends State<SessionsPage> {
 
   Future<void> _loadPersistedPrefs() async {
     try {
-      final prefs =
-          await widget.app.loadWorkspaceModelPrefs(widget.workspace.workspaceKey);
+      final prefs = await widget.app.loadWorkspaceModelPrefs(
+        widget.workspace.workspaceKey,
+      );
       if (!mounted || prefs == null) return;
       setState(() {
         _draftProvider = prefs.provider;
@@ -96,9 +97,9 @@ class _SessionsPageState extends State<SessionsPage> {
         _workspaceConfig = config;
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('读取模型配置失败：$e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('读取模型配置失败：$e')));
         }
         if (mounted) setState(() => _configLoading = false);
         return;
@@ -115,9 +116,12 @@ class _SessionsPageState extends State<SessionsPage> {
     // workspace-level mode from readWorkspaceState settings wins when present.
     final prep = await widget.app.fetchWorkspacePrep();
     final modeOptions = _prepOptionValues(
-        prep, const ['mode', 'collaborationMode'],
-        const ['build', 'edit', 'plan', 'yolo']);
-    final currentMode = _draftMode ??
+      prep,
+      const ['mode', 'collaborationMode'],
+      const ['build', 'edit', 'plan', 'yolo'],
+    );
+    final currentMode =
+        _draftMode ??
         config.mode ??
         _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
     if (!mounted) return;
@@ -162,7 +166,9 @@ class _SessionsPageState extends State<SessionsPage> {
   /// The picker shows the persisted selection (highlighted) instead of the
   /// workspace's current defaults once the user has chosen something.
   SessionModelConfig _draftConfig(SessionModelConfig base) {
-    if (_draftProvider == null && _draftModel == null && _draftThought == null) {
+    if (_draftProvider == null &&
+        _draftModel == null &&
+        _draftThought == null) {
       return base;
     }
     return SessionModelConfig(
@@ -179,7 +185,7 @@ class _SessionsPageState extends State<SessionsPage> {
     if (text.isEmpty) return;
     setState(() => _sending = true);
     try {
-      await widget.app
+      final sessionId = await widget.app
           .createSession(
             text,
             provider: _draftProvider,
@@ -190,10 +196,24 @@ class _SessionsPageState extends State<SessionsPage> {
           .timeout(const Duration(seconds: 15));
       _inputController.clear();
       // The selection stays: it is persisted for the next session too.
+      // Jump straight into the new session; without an id in the command
+      // result the session still shows up in the list on the next refresh.
+      if (mounted && sessionId != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ConversationPage(
+              app: widget.app,
+              sessionId: sessionId,
+              title: text,
+            ),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('创建会话失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('创建会话失败：$e')));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -212,13 +232,15 @@ class _SessionsPageState extends State<SessionsPage> {
     try {
       await widget.app.renameSession(session.taskId!, result);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已重命名')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已重命名')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('重命名失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('重命名失败：$e')));
       }
     }
   }
@@ -249,13 +271,15 @@ class _SessionsPageState extends State<SessionsPage> {
     try {
       await widget.app.archiveSession(session.taskId!);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已归档')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已归档')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('归档失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('归档失败：$e')));
       }
     }
   }
@@ -267,15 +291,15 @@ class _SessionsPageState extends State<SessionsPage> {
   bool _batchArchiving = false;
 
   void _exitMultiSelect() => setState(() {
-        _multiSelect = false;
-        _selectedIds.clear();
-      });
+    _multiSelect = false;
+    _selectedIds.clear();
+  });
 
   void _toggleSelectAll() {
     setState(() {
-      final sessions = widget.app.sessions;
-      final allIds = sessions
-          .where((s) => s.taskId != null)
+      // Running sessions are never archivable — select-all skips them.
+      final allIds = widget.app.sessions
+          .where((s) => s.taskId != null && !s.isRunning)
           .map((s) => s.taskId!)
           .toSet();
       if (_selectedIds.length >= allIds.length) {
@@ -315,24 +339,28 @@ class _SessionsPageState extends State<SessionsPage> {
     if (confirmed != true) return;
     setState(() => _batchArchiving = true);
     try {
-      final failed =
-          await widget.app.archiveSessions(_selectedIds.toList());
+      final failed = await widget.app.archiveSessions(_selectedIds.toList());
       if (!mounted) return;
       setState(() {
         _multiSelect = false;
         _selectedIds.clear();
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(failed == 0
-              ? '已归档 $count 个会话'
-              : '已归档 ${count - failed} 个，$failed 个失败'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              failed == 0
+                  ? '已归档 $count 个会话'
+                  : '已归档 ${count - failed} 个，$failed 个失败',
+            ),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('批量归档失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('批量归档失败：$e')));
       }
     } finally {
       if (mounted) setState(() => _batchArchiving = false);
@@ -343,7 +371,10 @@ class _SessionsPageState extends State<SessionsPage> {
 
   /// Config-option values by id from `prepareWorkspace`, else [fallback].
   List<String> _prepOptionValues(
-      WorkspacePrep? prep, List<String> ids, List<String> fallback) {
+    WorkspacePrep? prep,
+    List<String> ids,
+    List<String> fallback,
+  ) {
     if (prep != null) {
       for (final id in ids) {
         final option = prep.option(id);
@@ -449,8 +480,9 @@ class _SessionsPageState extends State<SessionsPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('操作失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('操作失败：$e')));
       }
     }
   }
@@ -459,13 +491,15 @@ class _SessionsPageState extends State<SessionsPage> {
     try {
       await widget.app.unarchiveSession(session.taskId!);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('已恢复「$title」')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('已恢复「$title」')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('恢复失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('恢复失败：$e')));
       }
     }
   }
@@ -474,9 +508,8 @@ class _SessionsPageState extends State<SessionsPage> {
   /// 模型部分草稿优先；协作模式取草稿或项目的当前值
   /// （readWorkspaceState settings.mode.current）。
   Widget _buildModelLabel(ColorScheme scheme) {
-    final hasDraft = _draftProvider != null ||
-        _draftModel != null ||
-        _draftThought != null;
+    final hasDraft =
+        _draftProvider != null || _draftModel != null || _draftThought != null;
     final String modelText;
     if (hasDraft) {
       modelText = [
@@ -486,7 +519,8 @@ class _SessionsPageState extends State<SessionsPage> {
       ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
     } else {
       final cfg = _workspaceConfig;
-      modelText = (cfg == null || (cfg.model == null && cfg.thoughtLevel == null))
+      modelText =
+          (cfg == null || (cfg.model == null && cfg.thoughtLevel == null))
           ? '工作区默认'
           : [
               _providerDisplay(cfg.provider),
@@ -495,21 +529,45 @@ class _SessionsPageState extends State<SessionsPage> {
             ].whereType<String>().join(' · ');
     }
     final mode = _draftMode ?? _workspaceConfig?.mode;
-    final modeText =
-        (mode == null || mode.isEmpty) ? '' : ' · $mode';
+    final modeText = (mode == null || mode.isEmpty) ? '' : ' · $mode';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          '$modelText$modeText',
-          style: Theme.of(context)
-              .textTheme
-              .labelSmall
-              ?.copyWith(color: scheme.onSurfaceVariant),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '$modelText$modeText',
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // The draft is sticky (persisted); offer a one-tap way back to the
+          // workspace default.
+          if (hasDraft)
+            InkWell(
+              onTap: () async {
+                setState(() {
+                  _draftProvider = null;
+                  _draftModel = null;
+                  _draftThought = null;
+                });
+                try {
+                  await widget.app.clearWorkspaceModelPrefs(
+                    widget.workspace.workspaceKey,
+                  );
+                } catch (_) {
+                  // Persistence failing must not undo the in-memory clear.
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(Icons.close, size: 14, color: scheme.outline),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -534,280 +592,336 @@ class _SessionsPageState extends State<SessionsPage> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final allSelected =
-        _multiSelect && _selectedIds.length >= widget.app.sessions.length;
-    return Scaffold(
-      appBar: AppBar(
-        leading: _multiSelect
-            ? IconButton(
-                tooltip: '退出多选',
-                onPressed: _exitMultiSelect,
-                icon: const Icon(Icons.close),
-              )
-            : null,
-        title: Text(_multiSelect
-            ? (_selectedIds.isEmpty ? '选择会话' : '已选 ${_selectedIds.length} 项')
-            : (widget.workspace.workspaceLabel.isEmpty
-                ? widget.workspace.workspacePath
-                : widget.workspace.workspaceLabel)),
-        actions: _multiSelect
-            ? [
-                IconButton(
-                  tooltip: allSelected ? '取消全选' : '全选',
-                  onPressed: _toggleSelectAll,
-                  icon: Icon(
-                      allSelected ? Icons.deselect : Icons.select_all),
-                ),
-                IconButton(
-                  tooltip: '归档所选',
-                  onPressed: (_selectedIds.isEmpty || _batchArchiving)
-                      ? null
-                      : _batchArchive,
-                  icon: _batchArchiving
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.archive),
-                ),
-              ]
-            : [
-                IconButton(
-                  tooltip: '搜索会话',
-                  onPressed: () => setState(() => _searching = !_searching),
-                  icon: const Icon(Icons.search),
-                ),
-                IconButton(
-                  tooltip: '批量归档',
-                  onPressed: () => setState(() {
-                    _multiSelect = true;
-                    _tab = 0;
-                  }),
-                  icon: const Icon(Icons.checklist),
-                ),
-                IconButton(
-                  tooltip: '新建会话的模型与思考等级',
-                  onPressed: _configLoading ? null : _pickModelConfig,
-                  icon: const Icon(Icons.tune),
-                ),
-              ],
-      ),
-      // The input bar lives in the body Column (not bottomNavigationBar) so it
-      // rides up with the IME exactly like the conversation page does.
-      body: Column(
-        children: [
-          if (!_multiSelect) ...[
-            if (_searching) _buildSearchBar(),
-            _buildTabs(),
-          ],
-          Expanded(
-            child: ListenableBuilder(
-              listenable: widget.app,
-              builder: (context, _) {
-                final sessions = _visibleSessions();
-                if (sessions.isEmpty) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _tab == 2
-                                ? Icons.archive_outlined
-                                : Icons.forum_outlined,
-                            size: 56,
-                            color: scheme.outline,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            _tab == 2
-                                ? '没有已归档的会话'
-                                : (_query.isNotEmpty
-                                    ? '没有匹配的会话'
-                                    : '这个工作区还没有会话'),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          if (_tab != 2 && _query.isEmpty)
-                            Text(
-                              '在下方输入框直接开始一个新任务',
-                              style:
-                                  TextStyle(color: scheme.onSurfaceVariant),
-                            ),
-                        ],
-                      ),
+        _multiSelect &&
+        _selectedIds.length >=
+            widget.app.sessions.where((s) => !s.isRunning).length &&
+        widget.app.sessions.isNotEmpty;
+    // Back exits multi-select first instead of popping the page (Gmail/微信
+    // convention); only a second back press leaves the page.
+    return PopScope(
+      canPop: !_multiSelect,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _multiSelect) _exitMultiSelect();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: _multiSelect
+              ? IconButton(
+                  tooltip: '退出多选',
+                  onPressed: _exitMultiSelect,
+                  icon: const Icon(Icons.close),
+                )
+              : null,
+          title: Text(
+            _multiSelect
+                ? (_selectedIds.isEmpty
+                      ? '选择会话'
+                      : '已选 ${_selectedIds.length} 项')
+                : (widget.workspace.workspaceLabel.isEmpty
+                      ? widget.workspace.workspacePath
+                      : widget.workspace.workspaceLabel),
+          ),
+          actions: _multiSelect
+              ? [
+                  IconButton(
+                    tooltip: allSelected ? '取消全选' : '全选',
+                    onPressed: _toggleSelectAll,
+                    icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+                  ),
+                  IconButton(
+                    tooltip: '归档所选',
+                    onPressed: (_selectedIds.isEmpty || _batchArchiving)
+                        ? null
+                        : _batchArchive,
+                    icon: _batchArchiving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.archive),
+                  ),
+                ]
+              : [
+                  IconButton(
+                    tooltip: '搜索会话',
+                    onPressed: () => setState(() => _searching = !_searching),
+                    icon: const Icon(Icons.search),
+                  ),
+                  // 已归档 tab 没有可归档的东西：隐藏批量归档入口。
+                  if (_tab != 2)
+                    IconButton(
+                      tooltip: '批量归档',
+                      onPressed: () => setState(() {
+                        _multiSelect = true;
+                        _tab = 0;
+                      }),
+                      icon: const Icon(Icons.checklist),
                     ),
-                  );
-                }
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                  itemCount: sessions.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, i) {
-                    final s = sessions[i];
-                    final running = s.isRunning;
-                    final title = (s.taskTitle != null && s.taskTitle!.isNotEmpty)
-                        ? s.taskTitle!
-                        : '未命名会话';
-                    final id = s.taskId!;
-                    final selected = _selectedIds.contains(id);
-                    final card = Card(
-                      margin: EdgeInsets.zero,
-                      // Zero margin: the action buttons ride flush against the
-                      // card's right edge (spacing comes from the list).
-                      color: (_multiSelect && selected)
-                          ? scheme.surfaceContainerHighest
-                          : null,
-                      child: ListTile(
-                        leading: _multiSelect
-                            ? Icon(
-                                selected
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_unchecked,
-                                color: selected
-                                    ? scheme.primary
-                                    : scheme.outline,
-                              )
-                            : CircleAvatar(
-                                backgroundColor: running
-                                    ? scheme.primaryContainer
-                                    : scheme.surfaceContainerHighest,
-                                child: Icon(
-                                  running ? Icons.play_arrow : Icons.check,
-                                  size: 18,
-                                  color: running
-                                      ? scheme.onPrimaryContainer
-                                      : scheme.onSurfaceVariant,
+                  IconButton(
+                    tooltip: '新建会话的模型与思考等级',
+                    onPressed: _configLoading ? null : _pickModelConfig,
+                    icon: const Icon(Icons.tune),
+                  ),
+                ],
+        ),
+        // The input bar lives in the body Column (not bottomNavigationBar) so it
+        // rides up with the IME exactly like the conversation page does.
+        body: Column(
+          children: [
+            if (!_multiSelect) ...[
+              if (_searching) _buildSearchBar(),
+              _buildTabs(),
+            ],
+            Expanded(
+              child: ListenableBuilder(
+                listenable: widget.app,
+                builder: (context, _) {
+                  final sessions = _visibleSessions();
+                  if (sessions.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              _tab == 2
+                                  ? Icons.archive_outlined
+                                  : Icons.forum_outlined,
+                              size: 56,
+                              color: scheme.outline,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _tab == 2
+                                  ? '没有已归档的会话'
+                                  : (_query.isNotEmpty
+                                        ? '没有匹配的会话'
+                                        : '这个工作区还没有会话'),
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            if (_tab != 2 && _query.isEmpty)
+                              Text(
+                                '在下方输入框直接开始一个新任务',
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
                                 ),
                               ),
-                        title: Text(title,
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                    itemCount: sessions.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, i) {
+                      final s = sessions[i];
+                      final running = s.isRunning;
+                      final title =
+                          (s.taskTitle != null && s.taskTitle!.isNotEmpty)
+                          ? s.taskTitle!
+                          : '未命名会话';
+                      final id = s.taskId!;
+                      final selected = _selectedIds.contains(id);
+                      final card = Card(
+                        margin: EdgeInsets.zero,
+                        // Zero margin: the action buttons ride flush against the
+                        // card's right edge (spacing comes from the list).
+                        color: (_multiSelect && selected)
+                            ? scheme.surfaceContainerHighest
+                            : null,
+                        child: ListTile(
+                          leading: _multiSelect
+                              ? (running
+                                    // Running sessions can't be archived — keep
+                                    // the running marker instead of a checkbox.
+                                    ? Icon(
+                                        Icons.play_arrow,
+                                        color: scheme.outline,
+                                      )
+                                    : Icon(
+                                        selected
+                                            ? Icons.check_circle
+                                            : Icons.radio_button_unchecked,
+                                        color: selected
+                                            ? scheme.primary
+                                            : scheme.outline,
+                                      ))
+                              : CircleAvatar(
+                                  backgroundColor: running
+                                      ? scheme.primaryContainer
+                                      : scheme.surfaceContainerHighest,
+                                  child: Icon(
+                                    running ? Icons.play_arrow : Icons.check,
+                                    size: 18,
+                                    color: running
+                                        ? scheme.onPrimaryContainer
+                                        : scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                          title: Text(
+                            title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             // Unread sessions render bold with a dot.
                             style: (s.unreadAt != null && _tab != 2)
                                 ? const TextStyle(fontWeight: FontWeight.w700)
-                                : null),
-                        subtitle: Text(
-                          running ? '运行中' : '已完成',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        // Archived tab: restore button; otherwise the unread
-                        // dot (multi-select mode hides both).
-                        trailing: _multiSelect
-                            ? null
-                            : (_tab == 2
-                                ? IconButton(
-                                    tooltip: '取消归档',
-                                    onPressed: () =>
-                                        _unarchiveSession(s, title),
-                                    icon: const Icon(Icons.unarchive_outlined),
-                                  )
-                                : Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      if (s.unreadAt != null)
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(right: 8),
-                                          child: Icon(Icons.circle,
-                                              size: 8, color: scheme.primary),
+                                : null,
+                          ),
+                          subtitle: Text(
+                            running ? '运行中' : '已完成',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // Archived tab: restore button; otherwise the unread
+                          // dot (multi-select mode hides both).
+                          trailing: _multiSelect
+                              ? null
+                              : (_tab == 2
+                                    ? IconButton(
+                                        tooltip: '取消归档',
+                                        onPressed: () =>
+                                            _unarchiveSession(s, title),
+                                        icon: const Icon(
+                                          Icons.unarchive_outlined,
                                         ),
-                                      PopupMenuButton<String>(
-                                        tooltip: '更多操作',
-                                        onSelected: (value) {
-                                          if (value == 'pin') {
-                                            _togglePin(s);
-                                          }
-                                        },
-                                        itemBuilder: (context) => [
-                                          PopupMenuItem(
-                                            value: 'pin',
-                                            child: ListTile(
-                                              leading: Icon(
-                                                  s.pinned
-                                                      ? Icons.push_pin_outlined
-                                                      : Icons.push_pin,
-                                                  size: 20),
-                                              title: Text(s.pinned
-                                                  ? '取消置顶'
-                                                  : '置顶'),
-                                              contentPadding: EdgeInsets.zero,
+                                      )
+                                    : Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (s.unreadAt != null)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                right: 8,
+                                              ),
+                                              child: Icon(
+                                                Icons.circle,
+                                                size: 8,
+                                                color: scheme.primary,
+                                              ),
                                             ),
+                                          PopupMenuButton<String>(
+                                            tooltip: '更多操作',
+                                            onSelected: (value) {
+                                              if (value == 'pin') {
+                                                _togglePin(s);
+                                              }
+                                            },
+                                            itemBuilder: (context) => [
+                                              PopupMenuItem(
+                                                value: 'pin',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    s.pinned
+                                                        ? Icons
+                                                              .push_pin_outlined
+                                                        : Icons.push_pin,
+                                                    size: 20,
+                                                  ),
+                                                  title: Text(
+                                                    s.pinned ? '取消置顶' : '置顶',
+                                                  ),
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ],
+                                      )),
+                          onTap: _multiSelect
+                              ? () {
+                                  if (running) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('运行中的会话不能归档'),
                                       ),
-                                    ],
-                                  )),
-                        onTap: _multiSelect
-                            ? () => setState(() {
-                                  if (!_selectedIds.remove(id)) {
-                                    _selectedIds.add(id);
+                                    );
+                                    return;
                                   }
-                                })
-                            : () {
-                                Navigator.of(context).push(MaterialPageRoute(
-                                  builder: (_) => ConversationPage(
-                                    app: widget.app,
-                                    sessionId: id,
-                                    title: title,
-                                  ),
-                                ));
-                              },
-                        // Long-press enters multi-select with this item
-                        // checked (the standard bulk-action entry gesture).
-                        onLongPress: _multiSelect
-                            ? null
-                            : () => setState(() {
+                                  setState(() {
+                                    if (!_selectedIds.remove(id)) {
+                                      _selectedIds.add(id);
+                                    }
+                                  });
+                                }
+                              : () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => ConversationPage(
+                                        app: widget.app,
+                                        sessionId: id,
+                                        title: title,
+                                        archived: s.archived,
+                                      ),
+                                    ),
+                                  );
+                                },
+                          // Long-press enters multi-select with this item
+                          // checked (the standard bulk-action entry gesture).
+                          // The archived tab has no batch-archive entry, so the
+                          // gesture is disabled there too.
+                          onLongPress: _multiSelect || _tab == 2
+                              ? null
+                              : () => setState(() {
                                   _multiSelect = true;
                                   _selectedIds.add(id);
                                 }),
-                      ),
-                    );
-                    if (_multiSelect || _tab == 2) return card;
-                    return _SwipeActionTile(
-                      onRename: () => _renameSession(s, title),
-                      onArchive: () => _archiveSession(s, title),
-                      child: card,
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          _buildModelLabel(scheme),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _inputController,
-                      minLines: 1,
-                      maxLines: 4,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _createSession(),
-                      decoration: const InputDecoration(
-                        hintText: '给 agent 下达新任务…',
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _sending ? null : _createSession,
-                    icon: const Icon(Icons.send),
-                  ),
-                ],
+                        ),
+                      );
+                      if (_multiSelect || _tab == 2) return card;
+                      return _SwipeActionTile(
+                        onRename: () => _renameSession(s, title),
+                        // Running sessions can't be archived (only renamed).
+                        onArchive: running
+                            ? null
+                            : () => _archiveSession(s, title),
+                        child: card,
+                      );
+                    },
+                  );
+                },
               ),
             ),
-          ),
-        ],
+            _buildModelLabel(scheme),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _inputController,
+                        minLines: 1,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _createSession(),
+                        decoration: const InputDecoration(
+                          hintText: '给 agent 下达新任务…',
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      onPressed: _sending ? null : _createSession,
+                      icon: const Icon(Icons.send),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -851,28 +965,26 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('取消'),
         ),
-        FilledButton(
-          onPressed: _submit,
-          child: const Text('确定'),
-        ),
+        FilledButton(onPressed: _submit, child: const Text('确定')),
       ],
     );
   }
 }
 
-/// A list tile with iOS-style swipe actions: the two buttons hang off the
-/// card's right edge, parked beyond the tile's clip (invisible), and a
-/// left-drag translates card + buttons together so the buttons are pulled
-/// into view by the card itself.
+/// A list tile with iOS-style swipe actions: the buttons hang off the card's
+/// right edge, parked beyond the tile's clip (invisible), and a left-drag
+/// translates card + buttons together so they are pulled into view by the
+/// card itself. A null [onArchive] drops the archive button (running
+/// sessions can only be renamed).
 class _SwipeActionTile extends StatefulWidget {
   final Widget child;
   final VoidCallback onRename;
-  final VoidCallback onArchive;
+  final VoidCallback? onArchive;
 
   const _SwipeActionTile({
     required this.child,
     required this.onRename,
-    required this.onArchive,
+    this.onArchive,
   });
 
   @override
@@ -882,7 +994,9 @@ class _SwipeActionTile extends StatefulWidget {
 class _SwipeActionTileState extends State<_SwipeActionTile> {
   static const _actionWidth = 72.0;
   static const _gap = 8.0;
-  static const _revealExtent = _actionWidth * 2 + _gap;
+
+  double get _revealExtent =>
+      widget.onArchive == null ? _actionWidth : _actionWidth * 2 + _gap;
 
   double _drag = 0; // current offset, 0 (closed) … -_revealExtent (open)
   bool _open = false;
@@ -903,99 +1017,100 @@ class _SwipeActionTileState extends State<_SwipeActionTile> {
   }
 
   void _close() => setState(() {
-        _open = false;
-        _drag = 0;
-      });
+    _open = false;
+    _drag = 0;
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return LayoutBuilder(builder: (context, constraints) {
-      final tileWidth = constraints.maxWidth;
-      final target = _dragging ? _drag : (_open ? -_revealExtent : 0.0);
-      // Two layers, both within the tile's own bounds (a single wide strip
-      // would be unreachable: RenderBox.hitTest rejects positions outside
-      // its size). The card slides left; the action strip slides in from
-      // beyond the right edge by the same amount, staying flush with the
-      // card's right edge — iOS-style "pulled out by the card" motion.
-      return ClipRect(
-        child: SizedBox(
-          width: tileWidth,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragUpdate: _onDragUpdate,
-            onHorizontalDragEnd: _onDragEnd,
-            // While open the card absorbs taps (first tap closes the actions
-            // instead of opening the session); while closed the ListTile's
-            // own tap recognizer, being deeper, wins the arena.
-            onTap: _open ? _close : null,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(end: _revealExtent + target),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tileWidth = constraints.maxWidth;
+        final target = _dragging ? _drag : (_open ? -_revealExtent : 0.0);
+        // Two layers, both within the tile's own bounds (a single wide strip
+        // would be unreachable: RenderBox.hitTest rejects positions outside
+        // its size). The card slides left; the action strip slides in from
+        // beyond the right edge by the same amount, staying flush with the
+        // card's right edge — iOS-style "pulled out by the card" motion.
+        return ClipRect(
+          child: SizedBox(
+            width: tileWidth,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragUpdate: _onDragUpdate,
+              onHorizontalDragEnd: _onDragEnd,
+              // While open the card absorbs taps (first tap closes the actions
+              // instead of opening the session); while closed the ListTile's
+              // own tap recognizer, being deeper, wins the arena.
+              onTap: _open ? _close : null,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(end: _revealExtent + target),
+                      duration: _dragging
+                          ? Duration.zero
+                          : const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      builder: (context, actionOffset, child) =>
+                          Transform.translate(
+                            offset: Offset(actionOffset, 0),
+                            child: child,
+                          ),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _actionButton(
+                              icon: Icons.edit_outlined,
+                              label: '重命名',
+                              backgroundColor: scheme.secondaryContainer,
+                              foregroundColor: scheme.onSecondaryContainer,
+                              onTap: () {
+                                _close();
+                                widget.onRename();
+                              },
+                            ),
+                            if (widget.onArchive != null) ...[
+                              const SizedBox(width: _gap),
+                              _actionButton(
+                                icon: Icons.archive_outlined,
+                                label: '归档',
+                                backgroundColor: scheme.errorContainer,
+                                foregroundColor: scheme.onErrorContainer,
+                                onTap: () {
+                                  _close();
+                                  widget.onArchive!();
+                                },
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  TweenAnimationBuilder<double>(
+                    tween: Tween(end: target),
                     duration: _dragging
                         ? Duration.zero
                         : const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
-                    builder: (context, actionOffset, child) =>
-                        Transform.translate(
-                      offset: Offset(actionOffset, 0),
+                    builder: (context, offset, child) => Transform.translate(
+                      offset: Offset(offset, 0),
                       child: child,
                     ),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _actionButton(
-                            icon: Icons.edit_outlined,
-                            label: '重命名',
-                            backgroundColor: scheme.secondaryContainer,
-                            foregroundColor: scheme.onSecondaryContainer,
-                            onTap: () {
-                              _close();
-                              widget.onRename();
-                            },
-                          ),
-                          const SizedBox(width: _gap),
-                          _actionButton(
-                            icon: Icons.archive_outlined,
-                            label: '归档',
-                            backgroundColor: scheme.errorContainer,
-                            foregroundColor: scheme.onErrorContainer,
-                            onTap: () {
-                              _close();
-                              widget.onArchive();
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
+                    child: AbsorbPointer(absorbing: _open, child: widget.child),
                   ),
-                ),
-                TweenAnimationBuilder<double>(
-                  tween: Tween(end: target),
-                  duration: _dragging
-                      ? Duration.zero
-                      : const Duration(milliseconds: 200),
-                  curve: Curves.easeOut,
-                  builder: (context, offset, child) => Transform.translate(
-                    offset: Offset(offset, 0),
-                    child: child,
-                  ),
-                  child: AbsorbPointer(
-                    absorbing: _open,
-                    child: widget.child,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
 
   Widget _actionButton({

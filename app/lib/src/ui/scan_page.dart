@@ -1,13 +1,19 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../protocol/relay/relay_frame.dart';
 
 /// Full-screen QR scanner styled after WeChat's 扫一扫: darkened camera view
 /// with a rounded-square cutout, green corner brackets, a sweeping scan line,
 /// a close button, torch toggle, and a hint under the frame.
 ///
-/// Pops with the scanned string (or null when closed without a scan).
+/// Pops with the scanned string (or null when closed without a scan). Codes
+/// that are not pairing links are rejected in place so the user can rescan
+/// right away.
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key});
 
@@ -16,16 +22,19 @@ class ScanPage extends StatefulWidget {
 }
 
 class _ScanPageState extends State<ScanPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final MobileScannerController _controller;
   late final AnimationController _lineController;
   bool _handled = false;
+  bool _invalidHint = false;
+  Timer? _invalidHintTimer;
 
   static const _wechatGreen = Color(0xFF07C160);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = MobileScannerController(
       detectionSpeed: DetectionSpeed.noDuplicates,
     );
@@ -37,16 +46,47 @@ class _ScanPageState extends State<ScanPage>
 
   @override
   void dispose() {
+    // Never leave the torch burning after the page goes away.
+    if (_controller.value.torchState == TorchState.on) {
+      unawaited(_controller.toggleTorch());
+    }
+    WidgetsBinding.instance.removeObserver(this);
+    _invalidHintTimer?.cancel();
     _lineController.dispose();
     _controller.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning from the system settings with the permission freshly granted
+    // must bring the preview back without a manual page reopen.
+    if (state != AppLifecycleState.resumed) return;
+    final error = _controller.value.error;
+    if (error?.errorCode == MobileScannerErrorCode.permissionDenied) {
+      Permission.camera.isGranted.then((granted) {
+        if (granted && mounted) unawaited(_controller.start());
+      });
+    }
+  }
+
   void _onDetect(BarcodeCapture capture) {
     if (_handled) return;
-    final raw =
-        capture.barcodes.map((b) => b.rawValue).whereType<String>().firstOrNull;
+    final raw = capture.barcodes
+        .map((b) => b.rawValue)
+        .whereType<String>()
+        .firstOrNull;
     if (raw == null) return;
+    if (PairingCredential.fromUrl(raw) == null) {
+      // Not a pairing link: stay on the page and say so (noDuplicates keeps
+      // the same code from re-firing the hint in a loop).
+      _invalidHintTimer?.cancel();
+      setState(() => _invalidHint = true);
+      _invalidHintTimer = Timer(const Duration(milliseconds: 2500), () {
+        if (mounted) setState(() => _invalidHint = false);
+      });
+      return;
+    }
     _handled = true;
     Navigator.of(context).pop(raw);
   }
@@ -71,10 +111,22 @@ class _ScanPageState extends State<ScanPage>
                 controller: _controller,
                 scanWindow: scanRect,
                 onDetect: _onDetect,
+                errorBuilder: (context, error) {
+                  if (error.errorCode ==
+                      MobileScannerErrorCode.permissionDenied) {
+                    return _PermissionPlaceholder(
+                      onOpenSettings: () => openAppSettings(),
+                    );
+                  }
+                  return Center(
+                    child: Text(
+                      '相机不可用：${error.errorCode}',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  );
+                },
               ),
-              CustomPaint(
-                painter: _ScanOverlayPainter(scanRect: scanRect),
-              ),
+              CustomPaint(painter: _ScanOverlayPainter(scanRect: scanRect)),
               // Sweeping scan line inside the window. The Positioned must be
               // a direct Stack child — Positioned nested inside the
               // AnimatedBuilder silently loses its position in release builds.
@@ -85,11 +137,12 @@ class _ScanPageState extends State<ScanPage>
                     animation: _lineController,
                     builder: (context, _) {
                       return Align(
-                        alignment:
-                            Alignment(0, -0.96 + 1.92 * _lineController.value),
+                        alignment: Alignment(
+                          0,
+                          -0.96 + 1.92 * _lineController.value,
+                        ),
                         child: Padding(
-                          padding:
-                              const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                           child: Container(
                             height: 2.5,
                             decoration: BoxDecoration(
@@ -166,6 +219,18 @@ class _ScanPageState extends State<ScanPage>
                       style: TextStyle(color: Colors.white38, fontSize: 12),
                     ),
                     const SizedBox(height: 20),
+                    if (_invalidHint)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          '不是有效的配对码',
+                          style: TextStyle(
+                            color: Colors.orangeAccent,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                     ValueListenableBuilder<MobileScannerState>(
                       valueListenable: _controller,
                       builder: (context, state, _) {
@@ -192,6 +257,40 @@ class _ScanPageState extends State<ScanPage>
   }
 }
 
+/// Shown when the camera permission was denied: explains why and offers a
+/// jump to the system settings. Granting it revives the preview on resume
+/// (see _ScanPageState.didChangeAppLifecycleState).
+class _PermissionPlaceholder extends StatelessWidget {
+  final VoidCallback onOpenSettings;
+  const _PermissionPlaceholder({required this.onOpenSettings});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.no_photography_outlined,
+            size: 56,
+            color: Colors.white38,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '扫码需要相机权限',
+            style: TextStyle(color: Colors.white70, fontSize: 15),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            onPressed: onOpenSettings,
+            child: const Text('去设置'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Darkens everything except a rounded-square window, and draws the four
 /// green corner brackets around it.
 class _ScanOverlayPainter extends CustomPainter {
@@ -202,8 +301,7 @@ class _ScanOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final window =
-        RRect.fromRectAndRadius(scanRect, const Radius.circular(12));
+    final window = RRect.fromRectAndRadius(scanRect, const Radius.circular(12));
 
     // Dim layer with the window punched out.
     final dimPaint = Paint()..color = Colors.black54;

@@ -2,8 +2,20 @@
 /// AskUserQuestion question pages, permission (approval) options, and
 /// free-text elicitations. Answers are passed to [RequestSheet.onResolve],
 /// which the host translates into a `resolveInteraction` command.
+///
+/// When [RequestSheet.requestsListenable] is provided the sheet follows the
+/// live pending list: requests resolved elsewhere (timeout / another client)
+/// drop their pages in place, new arrivals append pages, and the sheet closes
+/// itself when nothing is left. Answers for surviving pages are preserved.
+///
+/// Cancel semantics mirror the desktop web client: permissions cancel via
+/// their deny option, question pages send action:"decline", and free-text
+/// pages offer no cancel (closing the sheet leaves them pending).
 library;
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../protocol/topics/topic_models.dart';
@@ -33,10 +45,21 @@ class _FreeTextPage extends _SheetPage {
 
 class RequestSheet extends StatefulWidget {
   final List<PendingRequest> requests;
-  final Future<void> Function(PendingRequest request, Map<String, Object?> answer)
-      onResolve;
+  final Future<void> Function(
+    PendingRequest request,
+    Map<String, Object?> answer,
+  )
+  onResolve;
 
-  const RequestSheet({super.key, required this.requests, required this.onResolve});
+  /// Live source of the pending list (same category filter as [requests]).
+  final ValueListenable<List<PendingRequest>>? requestsListenable;
+
+  const RequestSheet({
+    super.key,
+    required this.requests,
+    required this.onResolve,
+    this.requestsListenable,
+  });
 
   @override
   State<RequestSheet> createState() => _RequestSheetState();
@@ -47,10 +70,16 @@ class _RequestSheetState extends State<RequestSheet> {
   int _page = 0;
   bool _submitting = false;
 
+  /// Inline error from the last submit attempt (a SnackBar would render
+  /// behind this modal sheet). Cleared on the next attempt.
+  String? _error;
+
   /// Flattens every interaction into one horizontal list: questions get one
   /// page each, permissions and free-text elicitations one page per request.
-  late final List<_SheetPage> _pages = [
-    for (final request in widget.requests)
+  late final List<_SheetPage> _pages = _buildPages(widget.requests);
+
+  static List<_SheetPage> _buildPages(List<PendingRequest> requests) => [
+    for (final request in requests)
       if (request.hasQuestions)
         for (final question in request.questions)
           _QuestionPage(request, question)
@@ -77,10 +106,12 @@ class _RequestSheetState extends State<RequestSheet> {
   void initState() {
     super.initState();
     _pageController = PageController();
+    widget.requestsListenable?.addListener(_reconcile);
   }
 
   @override
   void dispose() {
+    widget.requestsListenable?.removeListener(_reconcile);
     _pageController.dispose();
     for (final c in _customControllers.values) {
       c.dispose();
@@ -89,6 +120,39 @@ class _RequestSheetState extends State<RequestSheet> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  /// Reconciles the open pages with the live pending list: vanished requests
+  /// lose their pages, new ones append. Empty list → close the sheet.
+  void _reconcile() {
+    final listenable = widget.requestsListenable;
+    if (listenable == null || !mounted) return;
+    final requests = listenable.value;
+    final ids = {for (final r in requests) r.requestId};
+    final known = {for (final p in _pages) p.request.requestId};
+    final removed = _pages
+        .where((p) => !ids.contains(p.request.requestId))
+        .length;
+    final added = requests.where((r) => !known.contains(r.requestId)).toList();
+    if (removed == 0 && added.isEmpty) return;
+    setState(() {
+      _pages.removeWhere((p) => !ids.contains(p.request.requestId));
+      _pages.addAll(_buildPages(added));
+      if (_pages.isNotEmpty && _page >= _pages.length) {
+        _page = _pages.length - 1;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _pageController.hasClients) {
+            _pageController.jumpToPage(_page);
+          }
+        });
+      }
+    });
+    if (_pages.isEmpty) {
+      // Everything was resolved elsewhere (timeout or another client).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).pop();
+      });
+    }
   }
 
   TextEditingController _customController(String question) =>
@@ -100,8 +164,7 @@ class _RequestSheetState extends State<RequestSheet> {
   static String _optionIdentity(InteractionQuestionOption option) =>
       option.value.trim().isEmpty ? option.label : option.value;
 
-  bool get _currentAnswered {
-    final page = _pages[_page];
+  bool _pageAnswered(_SheetPage page) {
     switch (page) {
       case _QuestionPage(:final question):
         return (_selections[question.question]?.isNotEmpty ?? false) ||
@@ -114,6 +177,16 @@ class _RequestSheetState extends State<RequestSheet> {
         return request.isFreeTextInput &&
             _freeTextController(request.requestId).text.trim().isNotEmpty;
     }
+  }
+
+  bool get _currentAnswered =>
+      _pages.isNotEmpty && _pageAnswered(_pages[_page]);
+
+  int? get _firstUnansweredIndex {
+    for (var i = 0; i < _pages.length; i++) {
+      if (!_pageAnswered(_pages[i])) return i;
+    }
+    return null;
   }
 
   void _toggle(InteractionQuestion question, InteractionQuestionOption option) {
@@ -145,9 +218,7 @@ class _RequestSheetState extends State<RequestSheet> {
     );
   }
 
-  /// The answer for one page, or null when the user answered nothing on it
-  /// (unanswered pages are left pending — the runtime auto-resolves them
-  /// after its deadline).
+  /// The answer for one page, or null when the user answered nothing on it.
   Map<String, Object?>? _answerFor(_SheetPage page) {
     switch (page) {
       case _QuestionPage(:final request):
@@ -177,26 +248,44 @@ class _RequestSheetState extends State<RequestSheet> {
     }
   }
 
-  /// Resolution for a user-initiated cancel. Elicitations accept
-  /// `action: cancel`; permissions have no action — fall back to the deny
-  /// option when one exists, otherwise leave the request pending (the
-  /// runtime auto-resolves after its deadline).
+  /// Resolution for a user-initiated cancel, aligned with the desktop web
+  /// client: question/elicitation pages send action "decline"; permissions
+  /// resolve their deny option (no deny option → just close, the runtime's
+  /// deadline resolves it). Free-text pages have no cancel path at all (the
+  /// desktop's free-text dialog cannot be cancelled either).
   Map<String, Object?>? _cancelAnswerFor(_SheetPage page) {
     switch (page) {
       case _QuestionPage():
+        return {'action': 'decline'};
       case _FreeTextPage():
-        return {'action': 'cancel'};
+        return null;
       case _PermissionPage(:final request):
-        final deny = request.options
-            .where((o) => o.kind == 'deny')
-            .firstOrNull;
+        final deny = request.options.where((o) => o.kind == 'deny').firstOrNull;
         if (deny != null) return {'optionId': deny.optionId};
         return null;
     }
   }
 
   Future<void> _submit() async {
-    setState(() => _submitting = true);
+    // Every page must be answered; otherwise jump to the first gap and say so
+    // instead of silently leaving pages for the runtime's timeout.
+    final gap = _firstUnansweredIndex;
+    if (gap != null) {
+      setState(() => _error = null);
+      _pageController.animateToPage(
+        gap,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还有未回答的项')));
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
     try {
       // Resolve every page with the answers accumulated so far (one request
       // may own several question pages; resolve it once).
@@ -211,12 +300,19 @@ class _RequestSheetState extends State<RequestSheet> {
       // Close the panel once the answers are away; the next readSession poll
       // drops the resolved requests from the entries row.
       if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      // Keep the sheet and every answer — the user can retry.
+      if (mounted) setState(() => _error = '提交失败：$e');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
   }
 
   Future<void> _cancel() async {
+    if (_pages.isEmpty) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
     final page = _pages[_page];
     final answer = _cancelAnswerFor(page);
     if (answer == null) {
@@ -227,6 +323,8 @@ class _RequestSheetState extends State<RequestSheet> {
     try {
       await widget.onResolve(page.request, answer);
       if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = '操作失败：$e');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -235,14 +333,16 @@ class _RequestSheetState extends State<RequestSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final allPermissions = widget.requests.every((r) => !r.isElicitation);
-    final allQuestions = widget.requests.every(
-        (r) => r.hasQuestions || r.isFreeTextInput || r.isExitPlanMode);
+    // Title follows the live page set, not just the initial requests.
+    final allPermissions =
+        _pages.isNotEmpty && _pages.every((p) => p is _PermissionPage);
+    final allQuestions =
+        _pages.isNotEmpty && _pages.every((p) => p is! _PermissionPage);
     final title = allPermissions
         ? '需要批准'
         : allQuestions
-            ? '需要你的回答'
-            : '需要处理';
+        ? '需要你的回答'
+        : '需要处理';
 
     return SizedBox(
       // No local background: the sheet's own default background must stay
@@ -310,31 +410,48 @@ class _RequestSheetState extends State<RequestSheet> {
                 },
               ),
             ),
-            // Bottom actions.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Row(
-                children: [
-                  if (_page == _pages.length - 1) ...[
-                    FilledButton(
-                      onPressed: _submitting || !_currentAnswered
-                          ? null
-                          : _submit,
-                      child: const Text('提交'),
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: _submitting ? null : _cancel,
-                      child: const Text('取消'),
-                    ),
-                  ] else
-                    FilledButton(
-                      onPressed: _currentAnswered ? _goNext : null,
-                      child: const Text('下一题'),
-                    ),
-                ],
+            // Inline submit error (a SnackBar would render behind the sheet).
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _error!,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: scheme.error),
+                  ),
+                ),
               ),
-            ),
+            // Bottom actions.
+            if (_pages.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Row(
+                  children: [
+                    if (_page == _pages.length - 1) ...[
+                      FilledButton(
+                        onPressed: _submitting ? null : _submit,
+                        child: const Text('提交'),
+                      ),
+                      // Free-text pages have no cancel path (desktop parity);
+                      // closing the sheet leaves them pending.
+                      if (_pages[_page] is! _FreeTextPage) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: _submitting ? null : _cancel,
+                          child: const Text('取消'),
+                        ),
+                      ],
+                    ] else
+                      FilledButton(
+                        onPressed: _currentAnswered ? _goNext : null,
+                        child: const Text('下一题'),
+                      ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -355,9 +472,9 @@ class _RequestSheetState extends State<RequestSheet> {
               child: Text(
                 q.header,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.tertiary,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  color: scheme.tertiary,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           Row(
@@ -366,18 +483,17 @@ class _RequestSheetState extends State<RequestSheet> {
               Expanded(
                 child: Text(
                   q.question,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: scheme.onSurface),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
                 ),
               ),
               const SizedBox(width: 8),
               Text(
                 q.multiSelect ? '可多选' : '单选',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -398,8 +514,10 @@ class _RequestSheetState extends State<RequestSheet> {
               decoration: InputDecoration(
                 hintText: q.multiSelect ? '其他回答（可多选后补充）' : '其他回答…',
                 isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
               ),
             ),
           ),
@@ -422,10 +540,9 @@ class _RequestSheetState extends State<RequestSheet> {
               Expanded(
                 child: Text(
                   request.prompt,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: scheme.onSurface),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
                 ),
               ),
               if (request.riskLevel.isNotEmpty) ...[
@@ -440,8 +557,8 @@ class _RequestSheetState extends State<RequestSheet> {
               child: Text(
                 request.toolName,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ),
           const SizedBox(height: 8),
@@ -452,19 +569,18 @@ class _RequestSheetState extends State<RequestSheet> {
               onTap: _submitting
                   ? null
                   : () => setState(() {
-                        _permissionSelections[request.requestId] =
-                            option.optionId;
-                      }),
+                      _permissionSelections[request.requestId] =
+                          option.optionId;
+                    }),
             ),
           if (request.options.isEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 '（无可用选项）',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
         ],
@@ -477,20 +593,22 @@ class _RequestSheetState extends State<RequestSheet> {
     final selectedSimple = _simpleOptionSelections[request.requestId];
     final simpleOptions = request.input['options'] is List
         ? (request.input['options'] as List)
-            .whereType<Map<String, Object?>>()
-            .map((o) => (
+              .whereType<Map<String, Object?>>()
+              .map(
+                (o) => (
                   o['optionId']?.toString() ?? '',
                   o['label']?.toString() ?? '',
-                ))
-            .toList()
+                ),
+              )
+              .toList()
         : const <(String, String)>[];
     final prompt = request.isExitPlanMode
         ? (request.input['plan']?.toString().isNotEmpty == true
-            ? request.input['plan'].toString()
-            : request.prompt)
+              ? request.input['plan'].toString()
+              : request.prompt)
         : (request.input['prompt']?.toString().isNotEmpty == true
-            ? request.input['prompt'].toString()
-            : request.prompt);
+              ? request.input['prompt'].toString()
+              : request.prompt);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
@@ -499,10 +617,9 @@ class _RequestSheetState extends State<RequestSheet> {
         children: [
           Text(
             prompt,
-            style: Theme.of(context)
-                .textTheme
-                .bodyMedium
-                ?.copyWith(color: scheme.onSurface),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
           ),
           if (simpleOptions.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -517,9 +634,9 @@ class _RequestSheetState extends State<RequestSheet> {
                     onSelected: _submitting
                         ? null
                         : (_) => setState(() {
-                              _simpleOptionSelections[request.requestId] =
-                                  optionId;
-                            }),
+                            _simpleOptionSelections[request.requestId] =
+                                optionId;
+                          }),
                   ),
               ],
             ),
@@ -536,8 +653,10 @@ class _RequestSheetState extends State<RequestSheet> {
                 decoration: InputDecoration(
                   hintText: '输入你的回答…',
                   isDense: true,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                 ),
               ),
             ),
@@ -570,10 +689,10 @@ class _RiskChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: Theme.of(context)
-            .textTheme
-            .labelSmall
-            ?.copyWith(color: color, fontWeight: FontWeight.w600),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -597,8 +716,8 @@ class _PermissionOptionTile extends StatelessWidget {
     final label = option.name.isNotEmpty
         ? option.name
         : (PendingRequest.optionKindLabel(option.kind).isNotEmpty
-            ? PendingRequest.optionKindLabel(option.kind)
-            : option.optionId);
+              ? PendingRequest.optionKindLabel(option.kind)
+              : option.optionId);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -608,7 +727,9 @@ class _PermissionOptionTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
               size: 20,
               color: selected ? scheme.primary : scheme.onSurfaceVariant,
             ),
@@ -620,20 +741,20 @@ class _PermissionOptionTile extends StatelessWidget {
                   Text(
                     label,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: selected ? scheme.primary : scheme.onSurface,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal,
-                        ),
+                      color: selected ? scheme.primary : scheme.onSurface,
+                      fontWeight: selected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                    ),
                   ),
                   if (option.description.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 1),
                       child: Text(
                         option.description,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                 ],
@@ -676,8 +797,8 @@ class _QuestionOptionTile extends StatelessWidget {
               multiSelect
                   ? (selected ? Icons.check_box : Icons.check_box_outline_blank)
                   : (selected
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked),
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked),
               size: 20,
               color: selected ? scheme.primary : scheme.onSurfaceVariant,
             ),
@@ -689,20 +810,20 @@ class _QuestionOptionTile extends StatelessWidget {
                   Text(
                     option.label.isEmpty ? '（无标签）' : option.label,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: selected ? scheme.primary : scheme.onSurface,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal,
-                        ),
+                      color: selected ? scheme.primary : scheme.onSurface,
+                      fontWeight: selected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                    ),
                   ),
                   if (option.description.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 1),
                       child: Text(
                         option.description,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                 ],

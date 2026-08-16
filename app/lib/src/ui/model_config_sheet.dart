@@ -14,7 +14,8 @@ class ModelConfigSheet extends StatefulWidget {
     String provider,
     String model,
     String? thoughtLevel,
-  ) onApply;
+  )
+  onApply;
 
   /// Extra subtitle shown under the sheet title (e.g. "仅用于本次创建").
   final String? subtitle;
@@ -29,6 +30,12 @@ class ModelConfigSheet extends StatefulWidget {
   final String? currentMode;
   final Future<void> Function(String mode)? onModeChanged;
 
+  /// When true every selection is disabled (e.g. the agent is running —
+  /// session-level rewrites wait until it stops). The sheet stays open for
+  /// browsing, with [lockedReason] shown as a banner.
+  final bool locked;
+  final String? lockedReason;
+
   const ModelConfigSheet({
     super.key,
     required this.config,
@@ -38,6 +45,8 @@ class ModelConfigSheet extends StatefulWidget {
     this.modeOptions = const ['build', 'edit', 'plan', 'yolo'],
     this.currentMode,
     this.onModeChanged,
+    this.locked = false,
+    this.lockedReason,
   });
 
   @override
@@ -83,8 +92,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
     ];
   }
 
-  List<ModelOption> get _models =>
-      widget.config.availableModels.where((m) => m.provider == _provider).toList();
+  List<ModelOption> get _models => widget.config.availableModels
+      .where((m) => m.provider == _provider)
+      .toList();
 
   List<ThoughtLevelOption> get _thoughts {
     final fromModel = _model?.reasoningLevels ?? const <ThoughtLevelOption>[];
@@ -163,10 +173,7 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                   ),
                 Icon(Icons.tune, size: 20, color: scheme.primary),
                 const SizedBox(width: 8),
-                Text(
-                  '模型与思考等级',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                Text('模型与思考等级', style: Theme.of(context).textTheme.titleSmall),
               ],
             ),
             if (widget.subtitle != null)
@@ -174,12 +181,43 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   widget.subtitle!,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
+            if (widget.locked) ...[
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.lock_outline,
+                      size: 16,
+                      color: scheme.onTertiaryContainer,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        widget.lockedReason ?? '当前不可切换',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onTertiaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             // Breadcrumb of the current selection path.
             Text(
@@ -188,10 +226,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                 '模型：${currentModel ?? '未选择'}',
                 '思考：${currentThought ?? '未选择'}',
               ].join('  ›  '),
-              style: Theme.of(context)
-                  .textTheme
-                  .labelMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -207,10 +244,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
             const SizedBox(height: 8),
             Text(
               '第 ${_level + 1} 级 · 选择${_levels[_level]}',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: scheme.tertiary),
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.tertiary),
             ),
             const SizedBox(height: 4),
             SizedBox(
@@ -260,10 +296,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
       children: [
         Text(
           label,
-          style: Theme.of(context)
-              .textTheme
-              .labelMedium
-              ?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(
+            context,
+          ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -276,7 +311,11 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                   label: Text(mode),
                   selected: mode == selectedMode,
                   visualDensity: VisualDensity.compact,
-                  onSelected: _busy || mode == selectedMode || handler == null
+                  onSelected:
+                      widget.locked ||
+                          _busy ||
+                          mode == selectedMode ||
+                          handler == null
                       ? null
                       : (selected) async {
                           setState(() {
@@ -313,15 +352,16 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
           ),
           subtitle: Text(
             '${group.models.length} 个模型',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
           trailing: selected
               ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
               : const Icon(Icons.chevron_right),
-          onTap: _busy ? null : () => _selectProvider(group.providerId),
+          onTap: widget.locked || _busy
+              ? null
+              : () => _selectProvider(group.providerId),
         );
       },
     );
@@ -345,15 +385,14 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
             model.contextWindow != null
                 ? '上下文 ${model.contextWindow!} tokens'
                 : (model.providerLabel ?? ''),
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
           trailing: selected
               ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
               : const Icon(Icons.chevron_right),
-          onTap: _busy ? null : () => _selectModel(model),
+          onTap: widget.locked || _busy ? null : () => _selectModel(model),
         );
       },
     );
@@ -366,10 +405,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
       return Center(
         child: Text(
           '该模型不支持思考等级',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
         ),
       );
     }
@@ -388,7 +426,9 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
           trailing: selected
               ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
               : null,
-          onTap: _busy ? null : () => _selectThought(level.value),
+          onTap: widget.locked || _busy
+              ? null
+              : () => _selectThought(level.value),
         );
       },
     );

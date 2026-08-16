@@ -54,14 +54,14 @@ class _ProtocolLogPageState extends State<ProtocolLogPage> {
 
   Future<void> _copy() async {
     final text = ProtocolLog.instance.entries
-        .map((e) =>
-            '${e.at.toIso8601String().substring(11, 23)} ${e.message}')
+        .map((e) => '${e.at.toIso8601String().substring(11, 23)} ${e.message}')
         .join('\n');
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已复制日志')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已复制日志')));
     }
   }
 
@@ -86,10 +86,7 @@ class _ProtocolLogPageState extends State<ProtocolLogPage> {
       ),
       body: entries.isEmpty
           ? const Center(
-              child: Text(
-                '暂无协议日志',
-                style: TextStyle(color: Colors.grey),
-              ),
+              child: Text('暂无协议日志', style: TextStyle(color: Colors.grey)),
             )
           : ListView.builder(
               controller: _controller,
@@ -104,9 +101,9 @@ class _ProtocolLogPageState extends State<ProtocolLogPage> {
                   child: SelectableText(
                     '${entry.at.toIso8601String().substring(11, 23)}  ${entry.message}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
+                      fontFamily: 'monospace',
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
                   ),
                 );
               },

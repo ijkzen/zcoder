@@ -61,14 +61,74 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
     if (service == null) return;
     try {
       await service.save({...provider, 'enabled': enabled});
+      if (!enabled) {
+        // Drafts referencing the disabled provider fall back to the workspace
+        // default so the next created session can't pick a dead model.
+        await _clearDraftsFor(provider['id']?.toString());
+      }
       await _load();
     } catch (e) {
       _toast('切换失败：$e');
     }
   }
 
+  Future<void> _clearDraftsFor(String? providerId) async {
+    if (providerId == null || providerId.isEmpty) return;
+    try {
+      for (final prefs in await widget.app.db.listWorkspaceModelPrefs()) {
+        if (prefs.provider == providerId) {
+          await widget.app.clearWorkspaceModelPrefs(prefs.workspaceKey);
+        }
+      }
+    } catch (_) {
+      // Draft cleanup is best-effort; the provider itself was disabled.
+    }
+  }
+
+  /// "In use" = a local new-session draft or the active workspace's current
+  /// model references this provider. (Per-session historical models are a
+  /// desktop-side fact the workspace-list payload does not carry.)
+  Future<String?> _inUseReason(Map<String, Object?> provider) async {
+    final id = provider['id']?.toString() ?? '';
+    if (id.isEmpty) return null;
+    try {
+      final prefs = await widget.app.db.listWorkspaceModelPrefs();
+      if (prefs.any((p) => p.provider == id)) {
+        return '有工作区的新会话草稿正在使用该提供商';
+      }
+    } catch (_) {}
+    try {
+      final config = await widget.app.fetchWorkspaceModelConfig();
+      if (config.provider == id) {
+        return '当前工作区的默认模型正在使用该提供商';
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _delete(Map<String, Object?> provider) async {
-    final name = provider['name']?.toString() ?? provider['id']?.toString() ?? '';
+    final name =
+        provider['name']?.toString() ?? provider['id']?.toString() ?? '';
+    // Deleting an in-use provider is refused outright (disabling stays
+    // possible — it just falls back the drafts).
+    final inUse = await _inUseReason(provider);
+    if (!mounted) return;
+    if (inUse != null) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('无法删除'),
+          content: Text('「$name」正在使用中：$inUse。请先切换相关会话/草稿到其他模型。'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -123,8 +183,9 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
 
   void _toast(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -180,17 +241,17 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
             ),
             title: Text(name),
             subtitle: Text(
-              [type, baseUrl].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
+              [
+                type,
+                baseUrl,
+              ].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Switch(
-                  value: enabled,
-                  onChanged: (v) => _toggle(provider, v),
-                ),
+                Switch(value: enabled, onChanged: (v) => _toggle(provider, v)),
                 PopupMenuButton<String>(
                   onSelected: (value) {
                     if (value == 'delete') _delete(provider);
@@ -216,6 +277,27 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
 }
 
 /// 添加提供商表单：名称 / 接口类型 / Base URL / API Key / 模型 ID 列表。
+/// Phone-side strict validation for the add-provider form. Returns the error
+/// message, or null when the payload is clean.
+String? validateProviderForm({
+  required String name,
+  required String baseUrl,
+  required List<String> modelIds,
+}) {
+  if (name.trim().isEmpty) return '请填写名称';
+  final url = baseUrl.trim();
+  if (url.isNotEmpty) {
+    final uri = Uri.tryParse(url);
+    final ok =
+        uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
+    if (!ok) return 'Base URL 需是合法的 http(s) 地址';
+  }
+  if (modelIds.isEmpty) return '至少填写一个模型 ID';
+  return null;
+}
+
 class _AddProviderSheet extends StatefulWidget {
   const _AddProviderSheet();
 
@@ -315,10 +397,7 @@ class _AddProviderSheetState extends State<_AddProviderSheet> {
             const SizedBox(height: 16),
             Align(
               alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: _submit,
-                child: const Text('添加'),
-              ),
+              child: FilledButton(onPressed: _submit, child: const Text('添加')),
             ),
           ],
         ),
@@ -327,23 +406,29 @@ class _AddProviderSheetState extends State<_AddProviderSheet> {
   }
 
   void _submit() {
-    final name = _name.text.trim();
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请填写名称')));
-      return;
-    }
     final modelIds = _modelIds.text
         .split(',')
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+    final error = validateProviderForm(
+      name: _name.text,
+      baseUrl: _baseUrl.text,
+      modelIds: modelIds,
+    );
+    if (error != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
+    final baseUrl = _baseUrl.text.trim();
     Navigator.of(context).pop(<String, Object?>{
-      'name': name,
+      'name': _name.text.trim(),
       'type': _type,
-      if (_baseUrl.text.trim().isNotEmpty) 'baseUrl': _baseUrl.text.trim(),
+      if (baseUrl.isNotEmpty) 'baseUrl': baseUrl,
       if (_apiKey.text.trim().isNotEmpty) 'apiKey': _apiKey.text.trim(),
-      if (modelIds.isNotEmpty) 'modelIds': modelIds,
+      'modelIds': modelIds,
       'enabled': true,
     });
   }

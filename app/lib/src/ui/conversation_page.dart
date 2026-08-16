@@ -26,11 +26,16 @@ class ConversationPage extends StatefulWidget {
   /// Fallback AppBar title (the session's task title) — the snapshot's
   /// meta.title only arrives via event push, which the desktop never sends.
   final String? title;
+
+  /// Archived sessions open read-only: history browsable, composer disabled.
+  final bool archived;
+
   const ConversationPage({
     super.key,
     required this.app,
     required this.sessionId,
     this.title,
+    this.archived = false,
   });
 
   @override
@@ -59,6 +64,10 @@ class _ConversationPageState extends State<ConversationPage> {
   double _uploadProgress = 0;
   String _uploadingName = '';
 
+  /// Uploads that failed (or hit a broken connection) keep their bytes so the
+  /// file isn't lost — the chip offers retry / remove.
+  final _failedUploads = <_FailedUpload>[];
+
   @override
   void initState() {
     super.initState();
@@ -66,7 +75,15 @@ class _ConversationPageState extends State<ConversationPage> {
     // autolock otherwise (released in dispose).
     WakelockPlus.enable();
     _scrollController.addListener(_onScroll);
+    widget.app.addListener(_onAppTick);
     _open();
+  }
+
+  /// App-level tick: keep the per-category request notifiers (which feed an
+  /// open RequestSheet) in sync outside the build phase.
+  void _onAppTick() {
+    final state = widget.app.conversation?.state;
+    if (state != null) _syncRequestNotifiers(state);
   }
 
   Future<void> _open() async {
@@ -102,8 +119,11 @@ class _ConversationPageState extends State<ConversationPage> {
   void dispose() {
     WakelockPlus.disable();
     _olderDebounce?.cancel();
+    widget.app.removeListener(_onAppTick);
     _scrollController.dispose();
     _inputController.dispose();
+    _approvalsNotifier.dispose();
+    _questionsNotifier.dispose();
     widget.app.closeConversation();
     super.dispose();
   }
@@ -129,8 +149,9 @@ class _ConversationPageState extends State<ConversationPage> {
       _backToBottom();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('发送失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('发送失败：$e')));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -194,8 +215,8 @@ class _ConversationPageState extends State<ConversationPage> {
                 Text(
                   (title == null || title.isEmpty)
                       ? ((fallback == null || fallback.isEmpty)
-                          ? '会话'
-                          : fallback)
+                            ? '会话'
+                            : fallback)
                       : title,
                   style: Theme.of(context).textTheme.titleMedium,
                   maxLines: 1,
@@ -206,8 +227,8 @@ class _ConversationPageState extends State<ConversationPage> {
                       ? (state == null ? '连接中…' : '已连接')
                       : SessionPhase.zh(phase),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             );
@@ -233,40 +254,46 @@ class _ConversationPageState extends State<ConversationPage> {
                   _runGoalCommand(widget.app.resumeGoal, '已恢复目标');
               }
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'compact',
-                child: ListTile(
-                  leading: Icon(Icons.compress),
-                  title: Text('压缩会话'),
-                  contentPadding: EdgeInsets.zero,
+            // Session-level state rewrites (compact) are refused while the
+            // agent runs — interrupt first.
+            itemBuilder: (context) {
+              final running = _state?.isAgentRunning ?? false;
+              return [
+                PopupMenuItem(
+                  value: 'compact',
+                  enabled: !running,
+                  child: ListTile(
+                    leading: const Icon(Icons.compress),
+                    title: Text(running ? '压缩会话（运行中不可用）' : '压缩会话'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
-              ),
-              PopupMenuItem(
-                value: 'model',
-                child: ListTile(
-                  leading: Icon(Icons.tune),
-                  title: Text('切换模型'),
-                  contentPadding: EdgeInsets.zero,
+                const PopupMenuItem(
+                  value: 'model',
+                  child: ListTile(
+                    leading: Icon(Icons.tune),
+                    title: Text('切换模型'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
-              ),
-              PopupMenuItem(
-                value: 'pauseGoal',
-                child: ListTile(
-                  leading: Icon(Icons.pause_circle_outline),
-                  title: Text('暂停目标'),
-                  contentPadding: EdgeInsets.zero,
+                const PopupMenuItem(
+                  value: 'pauseGoal',
+                  child: ListTile(
+                    leading: Icon(Icons.pause_circle_outline),
+                    title: Text('暂停目标'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
-              ),
-              PopupMenuItem(
-                value: 'resumeGoal',
-                child: ListTile(
-                  leading: Icon(Icons.play_circle_outline),
-                  title: Text('恢复目标'),
-                  contentPadding: EdgeInsets.zero,
+                const PopupMenuItem(
+                  value: 'resumeGoal',
+                  child: ListTile(
+                    leading: Icon(Icons.play_circle_outline),
+                    title: Text('恢复目标'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
-              ),
-            ],
+              ];
+            },
           ),
         ],
       ),
@@ -284,8 +311,7 @@ class _ConversationPageState extends State<ConversationPage> {
           // after the turn ends (the desktop's own web UI gates on session
           // phase, not the row) — so the status line is shown only while
           // readSession says the session is running.
-          final runningTurn =
-              state.isAgentRunning ? _runningTurn(rows) : null;
+          final runningTurn = state.isAgentRunning ? _runningTurn(rows) : null;
           // Smart scroll: while the user sits at the bottom, keep the latest
           // row visible as new rows stream in. Scrolling up disengages the
           // follow (see _onScroll); the floating button or scrolling back to
@@ -304,9 +330,7 @@ class _ConversationPageState extends State<ConversationPage> {
                 child: Stack(
                   children: [
                     rows.isEmpty
-                        ? const Center(
-                            child: Text('等待 agent 开始工作…'),
-                          )
+                        ? const Center(child: Text('等待 agent 开始工作…'))
                         : ListView.builder(
                             controller: _scrollController,
                             reverse: true,
@@ -319,12 +343,12 @@ class _ConversationPageState extends State<ConversationPage> {
                               if (runningTurn != null && i == 0) {
                                 return _TurnStatusLine(
                                   key: ValueKey('turn-${runningTurn.rowId}'),
-                                  startedAt: runningTurn.startedAt ??
+                                  startedAt:
+                                      runningTurn.startedAt ??
                                       runningTurn.createdAt,
                                 );
                               }
-                              final j =
-                                  rows.length - 1 - (i - extraStatusRow);
+                              final j = rows.length - 1 - (i - extraStatusRow);
                               return _rowWidget(
                                 context,
                                 rows[j],
@@ -387,10 +411,7 @@ class _ConversationPageState extends State<ConversationPage> {
           for (final t in todos.whereType<Map>()) {
             final status = t['status']?.toString() ?? 'pending';
             final content = (t['activeForm'] ?? t['content'])?.toString() ?? '';
-            items.add(TodoItem(
-              content: content,
-              status: status,
-            ));
+            items.add(TodoItem(content: content, status: status));
           }
           return items;
         }
@@ -408,20 +429,24 @@ class _ConversationPageState extends State<ConversationPage> {
     final entries = <Widget>[];
     // Todos live in the floating checklist button above the input area now.
     if (approvals.isNotEmpty) {
-      entries.add(_EntryChip(
-        tooltip: '审批 · ${approvals.length}',
-        icon: Icons.verified_user_outlined,
-        count: approvals.length,
-        onTap: () => _showRequestSheet(approvals),
-      ));
+      entries.add(
+        _EntryChip(
+          tooltip: '审批 · ${approvals.length}',
+          icon: Icons.verified_user_outlined,
+          count: approvals.length,
+          onTap: () => _showRequestSheet(approvals),
+        ),
+      );
     }
     if (questions.isNotEmpty) {
-      entries.add(_EntryChip(
-        tooltip: '提问 · ${questions.length}',
-        icon: Icons.quiz_outlined,
-        count: questions.length,
-        onTap: () => _showRequestSheet(questions),
-      ));
+      entries.add(
+        _EntryChip(
+          tooltip: '提问 · ${questions.length}',
+          icon: Icons.quiz_outlined,
+          count: questions.length,
+          onTap: () => _showRequestSheet(questions),
+        ),
+      );
     }
     if (entries.isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -465,6 +490,11 @@ class _ConversationPageState extends State<ConversationPage> {
     // IME instead of being covered by the keyboard. Horizontal swipes between
     // question pages are unaffected; the sheet itself is dismissed via back /
     // outside tap (enableDrag: false keeps vertical scrolls inside pages).
+    //
+    // The sheet follows the live pending list: resolved elsewhere (timeout or
+    // another client) removes pages in place, new arrivals append, and the
+    // sheet auto-closes when nothing is left.
+    final category = requests.first.isElicitation;
     return showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -478,29 +508,51 @@ class _ConversationPageState extends State<ConversationPage> {
         child: RequestSheet(
           requests: requests,
           onResolve: _requestResolverFor,
+          requestsListenable: category
+              ? _questionsNotifier
+              : _approvalsNotifier,
         ),
       ),
     );
   }
 
+  /// Live per-category pending lists feeding an open RequestSheet.
+  final _approvalsNotifier = ValueNotifier<List<PendingRequest>>(const []);
+  final _questionsNotifier = ValueNotifier<List<PendingRequest>>(const []);
+
+  void _syncRequestNotifiers(ConversationState state) {
+    final approvals = state.pendingRequests
+        .where((r) => !r.isElicitation)
+        .toList();
+    final questions = state.pendingRequests
+        .where((r) => r.isElicitation)
+        .toList();
+    if (!_sameIds(_approvalsNotifier.value, approvals)) {
+      _approvalsNotifier.value = approvals;
+    }
+    if (!_sameIds(_questionsNotifier.value, questions)) {
+      _questionsNotifier.value = questions;
+    }
+  }
+
+  static bool _sameIds(List<PendingRequest> a, List<PendingRequest> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].requestId != b[i].requestId) return false;
+    }
+    return true;
+  }
+
+  /// Resolving throws on failure — the sheet keeps the user's answers and
+  /// surfaces the error inline, so nothing typed is lost to a flaky network.
   Future<void> Function(PendingRequest request, Map<String, Object?> answer)
-      get _requestResolverFor =>
-          (request, answer) async {
-            try {
-              await widget.app.resolveRequest(
-                request.requestId,
-                optionId: answer['optionId']?.toString(),
-                action: answer['action']?.toString(),
-                content: answer['content'],
-              );
-            } catch (e) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('提交失败：$e')),
-                );
-              }
-            }
-          };
+  get _requestResolverFor =>
+      (request, answer) => widget.app.resolveRequest(
+        request.requestId,
+        optionId: answer['optionId']?.toString(),
+        action: answer['action']?.toString(),
+        content: answer['content'],
+      );
 
   // ---------- Token usage detail sheet ----------
 
@@ -529,13 +581,15 @@ class _ConversationPageState extends State<ConversationPage> {
     try {
       await command().timeout(const Duration(seconds: 15));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(successText)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(successText)));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('目标操作失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('目标操作失败：$e')));
       }
     }
   }
@@ -566,13 +620,15 @@ class _ConversationPageState extends State<ConversationPage> {
     try {
       await widget.app.compact().timeout(const Duration(seconds: 15));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已发送压缩请求')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已发送压缩请求')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('压缩失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('压缩失败：$e')));
       }
     }
   }
@@ -595,11 +651,17 @@ class _ConversationPageState extends State<ConversationPage> {
     // more accurate than the workspace-level prepareWorkspace value.
     final prep = await widget.app.fetchWorkspacePrep();
     final modeOptions = _prepOptionValues(
-        prep, const ['mode', 'collaborationMode'],
-        const ['build', 'edit', 'plan', 'yolo']);
+      prep,
+      const ['mode', 'collaborationMode'],
+      const ['build', 'edit', 'plan', 'yolo'],
+    );
     final currentMode =
-        config.mode ?? _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
+        config.mode ??
+        _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
     if (!mounted) return;
+    // Session-level rewrites are refused while the agent runs (same family as
+    // compact): the sheet opens for browsing but every selection is locked.
+    final running = state.isAgentRunning;
     return showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -611,6 +673,8 @@ class _ConversationPageState extends State<ConversationPage> {
         config: config,
         autoClose: false,
         subtitle: '选择后立即应用于当前会话',
+        locked: running,
+        lockedReason: running ? 'agent 运行中，先中断再切换' : null,
         modeOptions: modeOptions,
         currentMode: currentMode,
         onModeChanged: (mode) async {
@@ -618,21 +682,24 @@ class _ConversationPageState extends State<ConversationPage> {
             await widget.app.switchCollaborationMode(mode);
           } catch (e) {
             if (sheetContext.mounted) {
-              ScaffoldMessenger.of(sheetContext).showSnackBar(
-                SnackBar(content: Text('切换模式失败：$e')),
-              );
+              ScaffoldMessenger.of(
+                sheetContext,
+              ).showSnackBar(SnackBar(content: Text('切换模式失败：$e')));
             }
           }
         },
         onApply: (provider, model, thoughtLevel) async {
           try {
-            await widget.app.switchModel(provider, model,
-                thoughtLevel: thoughtLevel);
+            await widget.app.switchModel(
+              provider,
+              model,
+              thoughtLevel: thoughtLevel,
+            );
           } catch (e) {
             if (sheetContext.mounted) {
-              ScaffoldMessenger.of(sheetContext).showSnackBar(
-                SnackBar(content: Text('切换模型失败：$e')),
-              );
+              ScaffoldMessenger.of(
+                sheetContext,
+              ).showSnackBar(SnackBar(content: Text('切换模型失败：$e')));
             }
           }
         },
@@ -642,7 +709,10 @@ class _ConversationPageState extends State<ConversationPage> {
 
   /// Config-option values by id from `prepareWorkspace`, else [fallback].
   List<String> _prepOptionValues(
-      WorkspacePrep? prep, List<String> ids, List<String> fallback) {
+    WorkspacePrep? prep,
+    List<String> ids,
+    List<String> fallback,
+  ) {
     if (prep != null) {
       for (final id in ids) {
         final option = prep.option(id);
@@ -719,8 +789,9 @@ class _ConversationPageState extends State<ConversationPage> {
     final token = _currentToken(text);
     final prefixEnd = text.length - token.length;
     _inputController.text = '${text.substring(0, prefixEnd)}$replacement ';
-    _inputController.selection =
-        TextSelection.collapsed(offset: _inputController.text.length);
+    _inputController.selection = TextSelection.collapsed(
+      offset: _inputController.text.length,
+    );
     _activeSuggestionPrefix = null;
     setState(() {});
     _inputFocusNode.requestFocus();
@@ -734,31 +805,41 @@ class _ConversationPageState extends State<ConversationPage> {
       final query = prefix.substring(1);
       for (final cmd in _slashCommands ?? const <SlashCommand>[]) {
         if (!cmd.name.startsWith(query)) continue;
-        items.add(ListTile(
-          dense: true,
-          leading: const Icon(Icons.sell_outlined, size: 20),
-          title: Text('/${cmd.name}'),
-          subtitle: cmd.description.isEmpty
-              ? null
-              : Text(cmd.description,
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () => _applySuggestion('/${cmd.name}'),
-        ));
+        items.add(
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.sell_outlined, size: 20),
+            title: Text('/${cmd.name}'),
+            subtitle: cmd.description.isEmpty
+                ? null
+                : Text(
+                    cmd.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+            onTap: () => _applySuggestion('/${cmd.name}'),
+          ),
+        );
       }
     } else if (prefix.startsWith(r'$')) {
       final query = prefix.substring(1);
       for (final skill in _skills ?? const <SkillEntry>[]) {
         if (!skill.name.startsWith(query)) continue;
-        items.add(ListTile(
-          dense: true,
-          leading: const Icon(Icons.auto_awesome, size: 20),
-          title: Text('\$${skill.name}'),
-          subtitle: skill.description == null
-              ? null
-              : Text(skill.description!,
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () => _applySuggestion('\$${skill.name}'),
-        ));
+        items.add(
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.auto_awesome, size: 20),
+            title: Text('\$${skill.name}'),
+            subtitle: skill.description == null
+                ? null
+                : Text(
+                    skill.description!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+            onTap: () => _applySuggestion('\$${skill.name}'),
+          ),
+        );
       }
     }
     if (items.isEmpty) {
@@ -841,8 +922,10 @@ class _ConversationPageState extends State<ConversationPage> {
     if (choice == null || !mounted) return;
     try {
       if (choice == 'image') {
-        final picked = await ImagePicker()
-            .pickImage(source: ImageSource.gallery, maxWidth: 2048);
+        final picked = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 2048,
+        );
         if (picked == null || !mounted) return;
         await _uploadAttachment(
           name: picked.name,
@@ -861,8 +944,9 @@ class _ConversationPageState extends State<ConversationPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('选择附件失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('选择附件失败：$e')));
       }
     }
   }
@@ -871,10 +955,12 @@ class _ConversationPageState extends State<ConversationPage> {
     required String name,
     required String mime,
     required Uint8List bytes,
+    _FailedUpload? retryOf,
   }) async {
     final sessionId = widget.app.conversation?.state?.sessionId;
     if (sessionId == null) return;
     setState(() {
+      if (retryOf != null) _failedUploads.remove(retryOf);
       _uploading = true;
       _uploadingName = name;
       _uploadProgress = 0;
@@ -896,9 +982,15 @@ class _ConversationPageState extends State<ConversationPage> {
       });
     } catch (e) {
       if (mounted) {
-        setState(() => _uploading = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('上传失败：$e')));
+        setState(() {
+          _uploading = false;
+          _failedUploads.add(
+            _FailedUpload(name: name, mime: mime, bytes: bytes),
+          );
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('上传失败：$e（可从暂存条重试）')));
       }
     }
   }
@@ -906,7 +998,10 @@ class _ConversationPageState extends State<ConversationPage> {
   /// Pending-attachment chips + in-flight upload progress, shown above the
   /// composer while anything is staged.
   Widget? _buildAttachmentBar() {
-    if (_attachments.isEmpty && !_uploading) return null;
+    if (_attachments.isEmpty && !_uploading && _failedUploads.isEmpty) {
+      return null;
+    }
+    final scheme = Theme.of(context).colorScheme;
     return Wrap(
       spacing: 8,
       runSpacing: 4,
@@ -919,6 +1014,24 @@ class _ConversationPageState extends State<ConversationPage> {
                 ? const Icon(Icons.image_outlined, size: 18)
                 : const Icon(Icons.insert_drive_file_outlined, size: 18),
             onDeleted: () => setState(() => _attachments.remove(a)),
+          ),
+        // Failed uploads stay as retryable chips — the picked file must never
+        // vanish silently.
+        for (final f in _failedUploads)
+          InputChip(
+            label: Text(f.name),
+            avatar: Icon(Icons.error_outline, size: 18, color: scheme.error),
+            labelStyle: TextStyle(color: scheme.error),
+            side: BorderSide(color: scheme.error.withValues(alpha: 0.5)),
+            onPressed: _uploading
+                ? null
+                : () => _uploadAttachment(
+                    name: f.name,
+                    mime: f.mime,
+                    bytes: f.bytes,
+                    retryOf: f,
+                  ),
+            onDeleted: () => setState(() => _failedUploads.remove(f)),
           ),
         if (_uploading)
           SizedBox(
@@ -946,6 +1059,33 @@ class _ConversationPageState extends State<ConversationPage> {
 
   Widget _buildInputBar() {
     final state = _state;
+    // Archived sessions are read-only: history browsable, composer replaced
+    // by a banner (restore from the session list to continue).
+    if (widget.archived) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+          child: Row(
+            children: [
+              Icon(
+                Icons.archive_outlined,
+                size: 18,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '已归档的会话为只读，恢复后可继续',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     // The interrupt button only exists while the agent is actually running:
     // readSession's session.status (2s poll) is the authority; control.canStop
     // only arrives with event-push snapshots and unions in if present.
@@ -958,10 +1098,7 @@ class _ConversationPageState extends State<ConversationPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (panel != null) ...[
-              panel,
-              const SizedBox(height: 6),
-            ],
+            if (panel != null) ...[panel, const SizedBox(height: 6)],
             if (attachmentBar != null) ...[
               attachmentBar,
               const SizedBox(height: 6),
@@ -994,18 +1131,24 @@ class _ConversationPageState extends State<ConversationPage> {
                     maxLines: 6,
                     textInputAction: TextInputAction.send,
                     onChanged: _onInputChanged,
-                    onSubmitted: (_) => _send(),
+                    onSubmitted: (_) {
+                      // Sending mid-upload would detach the message from its
+                      // attachments — wait for the progress bar to finish.
+                      if (!_sending && !_uploading) _send();
+                    },
                     decoration: const InputDecoration(
                       hintText: '给 agent 发消息…',
                       isDense: true,
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 IconButton.filled(
-                  onPressed: _sending ? null : _send,
+                  onPressed: _sending || _uploading ? null : _send,
                   icon: const Icon(Icons.send),
                 ),
               ],
@@ -1018,8 +1161,11 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Row renderers ----------
 
-  Widget _rowWidget(BuildContext context, ConversationRow row,
-      {int? nextCreatedAt}) {
+  Widget _rowWidget(
+    BuildContext context,
+    ConversationRow row, {
+    int? nextCreatedAt,
+  }) {
     switch (row) {
       case UserInputRow():
         return _LongPressRow(
@@ -1053,10 +1199,7 @@ class _ConversationPageState extends State<ConversationPage> {
               : () => _showReasoningDetail(row, durationMs),
         );
       case ToolCallRow():
-        return _ToolCallLine(
-          row: row,
-          onTap: () => _showToolDetail(row),
-        );
+        return _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
       case SubagentRow():
         return _SubagentLine(row: row);
       case TimelineMarkerRow():
@@ -1107,17 +1250,16 @@ class _ConversationPageState extends State<ConversationPage> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (sheetContext) => SafeArea(child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: actions,
-      )),
+      builder: (sheetContext) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: actions),
+      ),
     );
   }
 
   Map<String, Object?> _rowTarget(ConversationRow row) => {
-        'rowId': row.rowId,
-        if (row.entityId != null) 'entityId': row.entityId,
-      };
+    'rowId': row.rowId,
+    if (row.entityId != null) 'entityId': row.entityId,
+  };
 
   Future<void> _retryTurn(AssistantTextRow row) async {
     try {
@@ -1125,13 +1267,15 @@ class _ConversationPageState extends State<ConversationPage> {
           .retryTurn(_rowTarget(row))
           .timeout(const Duration(seconds: 15));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已重新执行该回合')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已重新执行该回合')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('重试失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('重试失败：$e')));
       }
     }
   }
@@ -1155,8 +1299,7 @@ class _ConversationPageState extends State<ConversationPage> {
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(controller.text),
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
             child: const Text('重发'),
           ),
         ],
@@ -1169,13 +1312,15 @@ class _ConversationPageState extends State<ConversationPage> {
           .editUserQuery(_rowTarget(row), newText)
           .timeout(const Duration(seconds: 15));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已重新发送')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已重新发送')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('重发失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('重发失败：$e')));
       }
     }
   }
@@ -1191,10 +1336,9 @@ class _ConversationPageState extends State<ConversationPage> {
             : '思考过程 · 持续了 ${_formatDuration(durationMs)}',
         child: SelectableText(
           row.text,
-          style: Theme.of(dialogContext)
-              .textTheme
-              .bodySmall
-              ?.copyWith(height: 1.5),
+          style: Theme.of(
+            dialogContext,
+          ).textTheme.bodySmall?.copyWith(height: 1.5),
         ),
       ),
     );
@@ -1265,10 +1409,7 @@ Widget _statusIcon(BuildContext context, String status, IconData icon) {
     return SizedBox(
       width: 14,
       height: 14,
-      child: CircularProgressIndicator(
-        strokeWidth: 2,
-        color: scheme.primary,
-      ),
+      child: CircularProgressIndicator(strokeWidth: 2, color: scheme.primary),
     );
   }
   final failed = status == 'error' || status == 'failed';
@@ -1286,6 +1427,18 @@ Widget _statusIcon(BuildContext context, String status, IconData icon) {
 /// — the latter loses the gesture arena to the row's `SelectableText` text
 /// selection (long-press then only selects text and the menu never opens).
 /// Taps still reach the child untouched.
+/// A picked file whose upload failed; kept so the user can retry or drop it.
+class _FailedUpload {
+  final String name;
+  final String mime;
+  final Uint8List bytes;
+  const _FailedUpload({
+    required this.name,
+    required this.mime,
+    required this.bytes,
+  });
+}
+
 class _LongPressRow extends StatefulWidget {
   final VoidCallback onLongPress;
   final Widget child;
@@ -1329,8 +1482,7 @@ class _MarkdownText extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context);
-    final styleSheet =
-        MarkdownStyleSheet.fromTheme(theme).copyWith(
+    final styleSheet = MarkdownStyleSheet.fromTheme(theme).copyWith(
       p: theme.textTheme.bodyMedium?.copyWith(color: color, height: 1.55),
       code: TextStyle(
         fontFamily: 'monospace',
@@ -1351,11 +1503,7 @@ class _MarkdownText extends StatelessWidget {
       blockquotePadding: const EdgeInsets.only(left: 12),
       listIndent: 20,
     );
-    return MarkdownBody(
-      data: text,
-      selectable: true,
-      styleSheet: styleSheet,
-    );
+    return MarkdownBody(data: text, selectable: true, styleSheet: styleSheet);
   }
 }
 
@@ -1459,9 +1607,7 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text(a.fileName),
-          content: Text(
-            '类型：${a.mime}\n大小：${_formatBytes(a.bytes)}',
-          ),
+          content: Text('类型：${a.mime}\n大小：${_formatBytes(a.bytes)}'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
@@ -1485,9 +1631,7 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
             Positioned.fill(
               child: InteractiveViewer(
                 maxScale: 6,
-                child: Center(
-                  child: Image.memory(bytes, fit: BoxFit.contain),
-                ),
+                child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
               ),
             ),
             Positioned(
@@ -1525,7 +1669,9 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final a = widget.attachment;
-    final icon = a.isImage ? Icons.image_outlined : Icons.insert_drive_file_outlined;
+    final icon = a.isImage
+        ? Icons.image_outlined
+        : Icons.insert_drive_file_outlined;
     return InkWell(
       onTap: _showPreview,
       borderRadius: BorderRadius.circular(10),
@@ -1607,10 +1753,9 @@ class _TurnStatusLineState extends State<_TurnStatusLine> {
             elapsed == null || elapsed < 0
                 ? '工作中'
                 : '工作中 ${_formatDuration(elapsed)}',
-            style: Theme.of(context)
-                .textTheme
-                .labelMedium
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),
@@ -1647,8 +1792,8 @@ class _ReasoningLine extends StatelessWidget {
                     ? '思考过程'
                     : '思考过程 持续了 ${_formatDuration(durationMs!)}',
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -1665,10 +1810,7 @@ class _ToolCallLine extends StatelessWidget {
   final ToolCallRow row;
   final VoidCallback onTap;
 
-  const _ToolCallLine({
-    required this.row,
-    required this.onTap,
-  });
+  const _ToolCallLine({required this.row, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1746,26 +1888,39 @@ class _ToolCallLine extends StatelessWidget {
 
     switch (name) {
       case 'Bash':
-        final verb =
-            running ? '正在执行' : failed ? '执行失败' : '已执行';
-        return (Icons.terminal, verb, arg('command') ?? _extractJsonString(row.inputText, 'command') ?? '');
+        final verb = running
+            ? '正在执行'
+            : failed
+            ? '执行失败'
+            : '已执行';
+        return (
+          Icons.terminal,
+          verb,
+          arg('command') ?? _extractJsonString(row.inputText, 'command') ?? '',
+        );
       case 'Read':
         return (
           Icons.description_outlined,
           '读取',
-          arg('file_path') ?? _extractJsonString(row.inputText, 'file_path') ?? '',
+          arg('file_path') ??
+              _extractJsonString(row.inputText, 'file_path') ??
+              '',
         );
       case 'Edit':
         return (
           Icons.edit_outlined,
           '编辑',
-          arg('file_path') ?? _extractJsonString(row.inputText, 'file_path') ?? '',
+          arg('file_path') ??
+              _extractJsonString(row.inputText, 'file_path') ??
+              '',
         );
       case 'Write':
         return (
           Icons.note_add_outlined,
           '写入',
-          arg('file_path') ?? _extractJsonString(row.inputText, 'file_path') ?? '',
+          arg('file_path') ??
+              _extractJsonString(row.inputText, 'file_path') ??
+              '',
         );
       case 'Grep':
         return (Icons.search, '搜索', arg('pattern') ?? '');
@@ -1790,13 +1945,17 @@ class _ToolCallLine extends StatelessWidget {
             );
           }
         }
-        final verb = running ? '正在运行' : failed ? '运行失败' : name;
+        final verb = running
+            ? '正在运行'
+            : failed
+            ? '运行失败'
+            : name;
         final preview = input == null
             ? ''
             : input.entries
-                .where((e) => e.value is String || e.value is num)
-                .map((e) => e.value.toString())
-                .firstOrNull;
+                  .where((e) => e.value is String || e.value is num)
+                  .map((e) => e.value.toString())
+                  .firstOrNull;
         return (Icons.build_outlined, verb, _firstLine(preview ?? ''));
     }
   }
@@ -1814,8 +1973,7 @@ class _ToolCallLine extends StatelessWidget {
   /// Extracts a string field from possibly-truncated JSON (streaming input).
   static String? _extractJsonString(String? raw, String key) {
     if (raw == null || raw.isEmpty) return null;
-    final m =
-        RegExp('"$key"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)').firstMatch(raw);
+    final m = RegExp('"$key"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)').firstMatch(raw);
     return m?.group(1);
   }
 
@@ -1839,8 +1997,9 @@ class _ToolCallLine extends StatelessWidget {
   static String _humanize(String slug) {
     final words = slug.split(RegExp(r'[-_]')).where((w) => w.isNotEmpty);
     return words
-        .mapIndexed((i, w) =>
-            i == 0 ? '${w[0].toUpperCase()}${w.substring(1)}' : w)
+        .mapIndexed(
+          (i, w) => i == 0 ? '${w[0].toUpperCase()}${w.substring(1)}' : w,
+        )
         .join(' ');
   }
 }
@@ -1860,8 +2019,9 @@ class _SubagentLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final summary =
-        row.summaryText.isEmpty ? '子代理' : _firstLine(row.summaryText);
+    final summary = row.summaryText.isEmpty
+        ? '子代理'
+        : _firstLine(row.summaryText);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
@@ -1871,10 +2031,9 @@ class _SubagentLine extends StatelessWidget {
           Expanded(
             child: Text(
               summary,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1919,10 +2078,9 @@ class _TimelineMarkerLine extends StatelessWidget {
           Flexible(
             child: Text(
               text,
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: scheme.outline),
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.outline),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1996,8 +2154,8 @@ class _DetailLabel extends StatelessWidget {
       child: Text(
         text,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -2050,11 +2208,11 @@ class _TodoSheet extends StatelessWidget {
   const _TodoSheet({required this.todos});
 
   static String _statusLabel(String status) => switch (status) {
-        'completed' => '已完成',
-        'in_progress' => '进行中',
-        'pending' => '待办',
-        _ => status,
-      };
+    'completed' => '已完成',
+    'in_progress' => '进行中',
+    'pending' => '待办',
+    _ => status,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -2105,26 +2263,21 @@ class _TodoSheet extends StatelessWidget {
                           Expanded(
                             child: Text(
                               todo.content.isEmpty ? '（无内容）' : todo.content,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
+                              style: Theme.of(context).textTheme.bodyMedium
                                   ?.copyWith(
                                     decoration: todo.status == 'completed'
                                         ? TextDecoration.lineThrough
                                         : null,
-                                    color:
-                                        todo.status == 'completed'
-                                            ? scheme.onSurfaceVariant
-                                            : scheme.onSurface,
+                                    color: todo.status == 'completed'
+                                        ? scheme.onSurfaceVariant
+                                        : scheme.onSurface,
                                   ),
                             ),
                           ),
                           const SizedBox(width: 8),
                           Text(
                             _statusLabel(todo.status),
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
+                            style: Theme.of(context).textTheme.labelSmall
                                 ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
                         ],
@@ -2163,8 +2316,7 @@ class _TokenUsageSheet extends StatelessWidget {
     'mcp_tool_schemas': 'MCP 工具',
   };
 
-  static String _sourceLabel(String source) =>
-      _sourceLabels[source] ?? source;
+  static String _sourceLabel(String source) => _sourceLabels[source] ?? source;
 
   String _fmt(int v) {
     if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(2)}M';
@@ -2180,8 +2332,7 @@ class _TokenUsageSheet extends StatelessWidget {
     final ratio = usage.fillRatio;
     final breakdown = usage.breakdown;
     final totalChars = breakdown.fold<int>(0, (s, e) => s + e.chars);
-    final hitRate = usage.cacheHitRate ??
-        _cumulativeHitRate(tokenUsage);
+    final hitRate = usage.cacheHitRate ?? _cumulativeHitRate(tokenUsage);
     final token = tokenUsage;
 
     return SafeArea(
@@ -2210,7 +2361,7 @@ class _TokenUsageSheet extends StatelessWidget {
                     size <= 0
                         ? '上下文'
                         : '上下文 ${_fmt(used)} / ${_fmt(size)}'
-                            '${ratio != null ? ' (${(ratio * 100).toStringAsFixed(1)}%)' : ''}',
+                              '${ratio != null ? ' (${(ratio * 100).toStringAsFixed(1)}%)' : ''}',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ),
@@ -2229,10 +2380,9 @@ class _TokenUsageSheet extends StatelessWidget {
             if (breakdown.isNotEmpty) ...[
               Text(
                 '上下文构成',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelMedium
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 6),
               for (final entry in breakdown)
@@ -2280,19 +2430,15 @@ class _TokenUsageSheet extends StatelessWidget {
               children: [
                 Icon(Icons.bolt, size: 16, color: scheme.tertiary),
                 const SizedBox(width: 6),
-                Text(
-                  '平均缓存命中率',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                Text('平均缓存命中率', style: Theme.of(context).textTheme.bodySmall),
                 const Spacer(),
                 Text(
                   hitRate == null
                       ? '—'
                       : '${(hitRate * 100).toStringAsFixed(1)}%',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ],
             ),
@@ -2303,10 +2449,9 @@ class _TokenUsageSheet extends StatelessWidget {
                 '输出 ${_fmt(token['outputTokens'] as int? ?? 0)} · '
                 '缓存读取 ${_fmt(token['cacheReadTokens'] as int? ?? 0)}'
                 '${token['modelRequestCount'] is int ? ' · ${token['modelRequestCount']} 次请求' : ''}',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
           ],
