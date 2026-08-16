@@ -153,7 +153,10 @@ class AppController extends ChangeNotifier {
     final workspace = _bridge?.activeWorkspace;
     if (workspace == null) return const [];
     return _workspaces
-        .where((w) => w.taskId != null && w.workspaceKey == workspace.workspaceKey)
+        .where((w) =>
+            w.taskId != null &&
+            !w.archived &&
+            w.workspaceKey == workspace.workspaceKey)
         .toList();
   }
 
@@ -303,16 +306,56 @@ class AppController extends ChangeNotifier {
     });
   }
 
-  /// Fetches the active workspace's model registry (models + thought levels),
-  /// for the "new session" model picker.
+  /// Fetches the workspace's model registry (models + thought levels). The
+  /// result is cached for the bridge's lifetime — every model picker (new
+  /// session AND open conversation) must show this same full list, while the
+  /// session-level readSession settings only expose what the current session
+  /// resolves to (often a single provider, or a bare provider UUID for
+  /// finished sessions).
   Future<SessionModelConfig> fetchWorkspaceModelConfig() async {
+    final cached = _workspaceModelConfigCache;
+    if (cached != null) return cached;
     final channel = _bridge?.sessionChannel;
     if (channel == null) throw StateError('未连接');
     final result = await channel.readWorkspaceState();
     final settings = result['settings'];
-    return SessionModelConfig.fromSettings(
+    final config = SessionModelConfig.fromSettings(
       settings is Map<String, Object?> ? settings : null,
     );
+    if (config.availableModels.isNotEmpty) {
+      _workspaceModelConfigCache = config;
+    }
+    return config;
+  }
+
+  SessionModelConfig? _workspaceModelConfigCache;
+
+  /// The current selection of one open session (readSession settings), to be
+  /// shown as the highlighted values inside the workspace-wide picker.
+  SessionModelConfig get sessionModelConfig =>
+      _conversation?.state?.modelConfig ?? const SessionModelConfig();
+
+  /// Builds the picker config for the open conversation: the workspace's full
+  /// model list with the session's current provider/model/thought preselected.
+  /// Falls back to the session-only config when the workspace registry is
+  /// unavailable (offline).
+  Future<SessionModelConfig> conversationPickerConfig() async {
+    final current = sessionModelConfig;
+    try {
+      final ws = await fetchWorkspaceModelConfig();
+      if (ws.availableModels.isNotEmpty) {
+        return SessionModelConfig(
+          provider: current.provider,
+          model: current.model,
+          thoughtLevel: current.thoughtLevel,
+          availableModels: ws.availableModels,
+          availableThoughtLevels: ws.availableThoughtLevels,
+        );
+      }
+    } catch (_) {
+      // Offline — fall through to the session-only config.
+    }
+    return current;
   }
 
   Future<void> createSession(
@@ -344,8 +387,76 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> renameSession(String sessionId, String title) async {
-    await _sendCommand('renameSession', {'title': title}, sessionId: sessionId);
+    final channel = _bridge?.sessionChannel;
+    if (channel == null) throw StateError('未连接');
+    await channel.renameTask(sessionId, title);
+    await refreshSessions();
   }
+
+  Future<void> archiveSession(String sessionId) async {
+    final channel = _bridge?.sessionChannel;
+    if (channel == null) throw StateError('未连接');
+    await channel.archiveTask(sessionId);
+    // Optimistic removal — the desktop keeps archived tasks in the payload
+    // (flagged archived:true); the refresh below reconciles the list.
+    _workspaces.removeWhere((w) => w.taskId == sessionId);
+    notifyListeners();
+    await refreshSessions();
+  }
+
+  /// Archives several sessions at once. Returns the number that failed
+  /// (0 = all archived). Removes the succeeded ones optimistically.
+  Future<int> archiveSessions(List<String> sessionIds) async {
+    final channel = _bridge?.sessionChannel;
+    if (channel == null) throw StateError('未连接');
+    final failed = <String>[];
+    for (final id in sessionIds) {
+      try {
+        await channel.archiveTask(id);
+        _workspaces.removeWhere((w) => w.taskId == id);
+      } catch (_) {
+        failed.add(id);
+      }
+    }
+    notifyListeners();
+    await refreshSessions();
+    return failed.length;
+  }
+
+  /// Re-pulls the workspace/task list so the sessions list reflects remote
+  /// changes (rename, archive). Timeouts are swallowed — the workspaces stream
+  /// still fires when the response eventually lands.
+  Future<void> refreshSessions() async {
+    try {
+      await _bridge?.refreshWorkspaceList()
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      notifyListeners();
+    }
+  }
+
+  // ---------- Per-workspace model preferences ----------
+
+  /// The remembered provider/model/thought selection for new sessions in this
+  /// workspace (null or partial values fall back to the workspace defaults).
+  Future<WorkspaceModelPrefs?> loadWorkspaceModelPrefs(String workspaceKey) =>
+      db.getWorkspaceModelPrefs(workspaceKey);
+
+  Future<void> saveWorkspaceModelPrefs(
+    String workspaceKey, {
+    String? provider,
+    String? model,
+    String? thoughtLevel,
+  }) =>
+      db.saveWorkspaceModelPrefs(WorkspaceModelPrefs(
+        workspaceKey: workspaceKey,
+        provider: provider,
+        model: model,
+        thoughtLevel: thoughtLevel,
+      ));
+
+  Future<void> clearWorkspaceModelPrefs(String workspaceKey) =>
+      db.clearWorkspaceModelPrefs(workspaceKey);
 
   Future<void> deleteSession(String sessionId) async {
     await _sendCommand('deleteSession', const {}, sessionId: sessionId);
@@ -492,6 +603,7 @@ class AppController extends ChangeNotifier {
     _bridge = null;
     _relay = null;
     _workspaces = [];
+    _workspaceModelConfigCache = null;
     activePairing = null;
     lastError = null;
     _phase = BridgePhase.idle;

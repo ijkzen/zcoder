@@ -219,6 +219,7 @@ class _ConversationPageState extends State<ConversationPage> {
           }
           final extraStatusRow = runningTurn != null ? 1 : 0;
           _maybeAutoShowInteraction(state);
+          final todos = _latestTodos(state);
           return Column(
             children: [
               Expanded(
@@ -255,6 +256,22 @@ class _ConversationPageState extends State<ConversationPage> {
                               );
                             },
                           ),
+                    if (todos != null && todos.isNotEmpty)
+                      Positioned(
+                        right: 14,
+                        // Rests at the bottom edge; moves up to sit above the
+                        // back-to-bottom button when that one is visible.
+                        bottom: _atBottom ? 14 : 14 + 40 + 10,
+                        child: Badge.count(
+                          count: todos.length,
+                          child: FloatingActionButton.small(
+                            heroTag: 'todo-fab',
+                            tooltip: '查看待办',
+                            onPressed: () => _showTodoSheet(todos),
+                            child: const Icon(Icons.checklist),
+                          ),
+                        ),
+                      ),
                     if (!_atBottom)
                       Positioned(
                         right: 14,
@@ -307,19 +324,11 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   Widget _buildEntriesRow(ConversationState state) {
-    final todos = _latestTodos(state);
     final requests = state.pendingRequests;
     final approvals = requests.where((r) => !r.isElicitation).toList();
     final questions = requests.where((r) => r.isElicitation).toList();
     final entries = <Widget>[];
-    if (todos != null && todos.isNotEmpty) {
-      entries.add(_EntryChip(
-        tooltip: '查看待办',
-        icon: Icons.checklist,
-        count: todos.length,
-        onTap: () => _showTodoSheet(todos),
-      ));
-    }
+    // Todos live in the floating checklist button above the input area now.
     if (approvals.isNotEmpty) {
       entries.add(_EntryChip(
         tooltip: '审批 · ${approvals.length}',
@@ -433,20 +442,29 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Model / thought-level switch sheet ----------
 
-  Future<void> _showModelConfigSheet() {
+  Future<void> _showModelConfigSheet() async {
     final state = _state;
-    if (state == null) return Future.value();
-    final config = state.modelConfig;
+    if (state == null) return;
+    // The workspace registry (same source as the sessions page picker) — a
+    // session's own readSession settings only carry the models it resolves
+    // to (one provider, or a bare provider UUID once completed).
+    final config = await widget.app.conversationPickerConfig();
+    if (!mounted) return;
     if (config.availableModels.isEmpty &&
         config.availableThoughtLevels.isEmpty) {
-      return Future.value();
+      return;
     }
     return showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
+      enableDrag: false,
+      // Same interaction as the sessions page's picker: selections apply
+      // immediately but the sheet stays open until 完成 (autoClose: false).
       builder: (sheetContext) => ModelConfigSheet(
         config: config,
+        autoClose: false,
+        subtitle: '选择后立即应用于当前会话',
         onApply: (provider, model, thoughtLevel) async {
           try {
             await widget.app.switchModel(provider, model,
@@ -1445,12 +1463,11 @@ class _RequestSheetState extends State<_RequestSheet> {
     final allQuestions = widget.requests.every((r) => r.isElicitation);
     final height = MediaQuery.sizeOf(context).height * 0.66;
 
-    return Container(
+    return SizedBox(
+      // No local background: the sheet's own default background must stay
+      // uniform across the drag handle, header and page content (a local
+      // color here shows up as a mismatched band against the sheet default).
       height: height,
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       child: SafeArea(
         top: false,
         child: Column(

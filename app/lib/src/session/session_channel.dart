@@ -286,6 +286,31 @@ class SessionChannel {
     return raw is Map<String, Object?> ? raw : const {};
   }
 
+  /// Renames a task — the same RPC the desktop's web client calls
+  /// (`zcodeTaskService.renameTask({taskId, workspacePath, title})`), unlike
+  /// the renameSession conversation command which needs a live revision base.
+  Future<Map<String, Object?>> renameTask(
+    String taskId,
+    String title,
+  ) async {
+    final raw = await _channel.client.channel('zcode-task').call('renameTask', {
+      'workspacePath': workspaceKey,
+      'taskId': taskId,
+      'title': title,
+    });
+    return raw is Map<String, Object?> ? raw : const {};
+  }
+
+  /// Archives a task (web client: `zcodeTaskService.archiveTask({taskId,
+  /// workspacePath})`). Archived tasks drop out of the workspace task list.
+  Future<Map<String, Object?>> archiveTask(String taskId) async {
+    final raw = await _channel.client.channel('zcode-task').call('archiveTask', {
+      'workspacePath': workspaceKey,
+      'taskId': taskId,
+    });
+    return raw is Map<String, Object?> ? raw : const {};
+  }
+
   /// Switches the session's model (and optionally its thought level) directly
   /// on the runtime — no baseRevision needed, unlike the switchModelConfig
   /// conversation command.

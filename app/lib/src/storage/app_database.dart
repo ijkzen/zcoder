@@ -83,6 +83,25 @@ class CachedSession {
   });
 }
 
+/// Per-workspace remembered model selection for new sessions (ADR: the
+/// default workspace model may be broken, so users pick provider/model/thought
+/// explicitly and shouldn't have to redo it every time).
+class WorkspaceModelPrefs {
+  final String workspaceKey;
+  final String? provider;
+  final String? model;
+  final String? thoughtLevel;
+
+  const WorkspaceModelPrefs({
+    required this.workspaceKey,
+    this.provider,
+    this.model,
+    this.thoughtLevel,
+  });
+
+  bool get isEmpty => provider == null && model == null && thoughtLevel == null;
+}
+
 class AppDatabase {
   AppDatabase._();
   static final AppDatabase instance = AppDatabase._();
@@ -94,7 +113,7 @@ class AppDatabase {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'zcode_remote.db'),
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pairings (
@@ -126,9 +145,26 @@ class AppDatabase {
             PRIMARY KEY (session_id, row_id)
           )
         ''');
+        await _createWorkspaceModelPrefs(db);
+      },
+      onUpgrade: (db, from, to) async {
+        if (from < 2) {
+          await _createWorkspaceModelPrefs(db);
+        }
       },
     );
     return _db!;
+  }
+
+  static Future<void> _createWorkspaceModelPrefs(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS workspace_model_prefs (
+        workspace_key TEXT PRIMARY KEY,
+        provider TEXT,
+        model TEXT,
+        thought_level TEXT
+      )
+    ''');
   }
 
   // ---------- Pairings ----------
@@ -173,6 +209,48 @@ class AppDatabase {
   Future<void> deletePairing(int id) async {
     final db = await _database;
     await db.delete('pairings', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------- Workspace model preferences ----------
+
+  Future<WorkspaceModelPrefs?> getWorkspaceModelPrefs(String workspaceKey) async {
+    final db = await _database;
+    final rows = await db.query(
+      'workspace_model_prefs',
+      where: 'workspace_key = ?',
+      whereArgs: [workspaceKey],
+    );
+    if (rows.isEmpty) return null;
+    final r = rows.first;
+    return WorkspaceModelPrefs(
+      workspaceKey: workspaceKey,
+      provider: r['provider'] as String?,
+      model: r['model'] as String?,
+      thoughtLevel: r['thought_level'] as String?,
+    );
+  }
+
+  Future<void> saveWorkspaceModelPrefs(WorkspaceModelPrefs prefs) async {
+    final db = await _database;
+    await db.insert(
+      'workspace_model_prefs',
+      {
+        'workspace_key': prefs.workspaceKey,
+        'provider': prefs.provider,
+        'model': prefs.model,
+        'thought_level': prefs.thoughtLevel,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> clearWorkspaceModelPrefs(String workspaceKey) async {
+    final db = await _database;
+    await db.delete(
+      'workspace_model_prefs',
+      where: 'workspace_key = ?',
+      whereArgs: [workspaceKey],
+    );
   }
 
   // ---------- Session text cache ----------

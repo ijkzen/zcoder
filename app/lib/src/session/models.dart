@@ -63,6 +63,10 @@ class Workspace {
   final int? createdAt;
   final int? updatedAt;
 
+  /// Archived tasks stay in the workspace-list payload but must not render
+  /// (the desktop's web client filters on this same flag).
+  final bool archived;
+
   const Workspace({
     required this.workspaceKey,
     required this.workspacePath,
@@ -76,6 +80,7 @@ class Workspace {
     this.taskTitle,
     this.createdAt,
     this.updatedAt,
+    this.archived = false,
   });
 
   factory Workspace.fromJson(Map<String, Object?> json) {
@@ -95,6 +100,7 @@ class Workspace {
       taskTitle: json['title'] as String?,
       createdAt: json['createdAt'] as int?,
       updatedAt: json['updatedAt'] as int?,
+      archived: json['archived'] as bool? ?? false,
     );
   }
 

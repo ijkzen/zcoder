@@ -243,6 +243,15 @@ class BridgeManager {
     relay.sendPayload(payload);
   }
 
+  /// Re-requests the workspace/task list (e.g. after a rename or archive so
+  /// the sessions list reflects the change without waiting for a push).
+  /// Concurrent calls share the in-flight request.
+  Future<List<Workspace>> refreshWorkspaceList() {
+    final pending = _pendingWorkspaceList;
+    if (pending != null) return pending.future;
+    return _requestWorkspaceList();
+  }
+
   void _sendViewState() {    final workspace = _activeWorkspace;
     if (workspace == null) return;
     relay.sendPayload({

@@ -29,11 +29,12 @@ class ProjectGroup {
   }
 }
 
-/// Groups the flat task list by workspaceKey. Running projects first, then by
-/// most recent activity.
+/// Groups the flat task list by workspaceKey (archived tasks excluded — they
+/// stay in the payload but must not render or count). Running projects
+/// first, then by most recent activity.
 List<ProjectGroup> groupProjects(List<Workspace> tasks) {
   final byKey = <String, List<Workspace>>{};
-  for (final t in tasks) {
+  for (final t in tasks.where((t) => !t.archived)) {
     byKey.putIfAbsent(t.workspaceKey, () => []).add(t);
   }
   final groups = [
