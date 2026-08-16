@@ -191,6 +191,12 @@ Follow-up review of the v0.5 module surfaced and fixed:
   `control`/`meta`/`pendingInteractions` from rowsRange responses — with
   event push still absent (E2E), those inlined fields are the only source
   for the pending-interaction notification hook.
+  > **Correction (2026-08-17)**: push absence was a client-side bug, not a
+  > desktop limitation — `RpcChannel.requestEvent` wrapped event-listen args
+  > in a list, so the host keyed the listener under `conversation\0undefined`
+  > and never routed frames to it. Fixed; conversation frames (snapshot +
+  > state.updated deltas, incl. `queue`) now arrive on the real device
+  > (see docs/protocol/08 §3.2 for the root-cause write-up).
 - **Shared fragment assembly.** `lib/src/protocol/core/fragment_assembler.dart`
   now backs both the rpc-frame transport and the topic wire-frame assembler
   (mechanical assembly only; validation/fault policy stays per layer).
@@ -261,6 +267,17 @@ zemote's combo) and re-verified on the real device: the three
 push absence is independent of clientKind/appVersion;
 the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
 
+> **Superseded (2026-08-17)**: the "zero wire frames" observation was a
+> **client-side bug**, not a desktop push limitation. `RpcChannel.requestEvent`
+> passed event-listen args wrapped in a list (`[args]`), unlike the reference
+> client which passes the scope map directly; the host therefore registered
+> the listener under `conversation\0undefined` and routed frames by the real
+> workspaceKey, so nothing ever reached the phone. After unwrapping the args
+> (and aligning the conversation subscribe/listen/resync to zemote's minimal
+> `{workspacePath, workspaceIdentity?, sessionId}` shape), frames are verified
+> arriving on the real device — the polling fallback stays as a secondary
+> channel only. Full write-up: docs/protocol/08 §3.2.
+
 ### Conversation capabilities (stage 3)
 
 - **Compact** — AppBar `tune` button became a session menu (压缩会话 with a
@@ -289,6 +306,11 @@ the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
   menu. CONTEXT.md boundary updated.
 - **Deferred: held-queue UI** — snapshot-only data (no rowsRange inlining),
   deferred.
+  > **Implemented (2026-08-17)**: held-queue landed in full per
+  > docs/protocol/08 — queue rides the conversation frames (now delivered;
+  > see the stage-2 correction above) with the rowsRange-inline poll kept as
+  > a fallback. Queue bar UI (edit / send-now / delete / autoDrain), choice
+  > dialog, and the five queue commands are all in.
 
 ### Task list (stage 4)
 

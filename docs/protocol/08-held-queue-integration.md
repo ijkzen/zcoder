@@ -6,9 +6,10 @@
 `clientKind: mobileApp`，事件推送与队列管理均已实测可用）——文末列了它的对应
 文件/行号，可直接对照。
 
-> 现状：`CONTEXT.md` 写的是「held-queue management is deferred until event push
-> delivers queue state」。本指南证明队列状态**能**通过事件推送到达终端（zemote
-> 全量依赖它），并给出双通道（事件推送 + 轮询兜底）的落地方式。
+> 现状：本指南已按文末步骤全量落地（2026-08-17，commit 0b860b3），真机实测
+> 收到桌面端发出的排队消息。此前「held-queue management is deferred until event
+> push delivers queue state」与「事件推送对终端连接不投递」的结论均为**客户端
+> bug**——见 §3.2 的根因定论。
 
 ---
 
@@ -105,38 +106,50 @@ ack 语义：`accepted` / `rejected` / `stale`（baseRevision 过期）/ `duplic
 `onDynamicConversationFrame` 推送 snapshot（含 `queue`）与 deltas（含
 `state.updated → patch.queue`）。**zemote 全量依赖这条路**（`lib/protocol/
 conversation.dart` 只读 snapshot + state.updated，没有任何轮询兜底），实测稳定。
+zcoder 已打通（2026-08-17 修复后真机验证：`topic wire frame complete` +
+`wire frame delivered` 持续到达，会话 deltas 实时流入）。
 
-### 3.2 本仓库已知问题：07 号审计说事件推送收不到
+### 3.2 本仓库已知问题：07 号审计说事件推送收不到 —— 根因定论（2026-08-17）
 
-[07-flutter-app-audit.md](07-flutter-app-audit.md) 记录「204 wire frames 对终端
-连接永远不触发」。这与 zemote 的实测矛盾（同协议、同 `clientKind: mobileApp`、
-同 `appVersion 3.6.5`）。**最可疑的差异是订阅参数**，请按此 A/B 排查：
+[07-flutter-app-audit.md](07-flutter-app-audit.md) 曾记录「204 wire frames 对终端
+连接永远不触发」，且与 zemote 的实测矛盾（同协议、同 `clientKind: mobileApp`、
+同 `appVersion 3.6.5`）。排查结论如下，**旧的订阅参数 A/B 假设已被推翻**：
 
-| 参数 | zemote（可收到帧） | zcoder（收不到？） |
+> **根因（已修复并验证）**：`RpcChannel.requestEvent` 把事件监听参数包成
+> `[args]` 列表（沿用了 `requestPromise` 的「参数展开」约定，但事件**不展开**）。
+> host 用 `workspacePath` 从列表上取值得到 undefined，把监听器注册到
+> `conversation\0undefined` 键下，帧按真实 workspaceKey 路由永远到不了手机——
+> 订阅/轮询/行数据全部正常，唯独帧收不到。修复 = `requestEvent` 直接传 args
+> （对齐 zemote `addEventListener(arg: scope)` 与官方 renderer
+> `onDynamicConversationFrame(n)` 传 map 本身）。
+>
+> 排查过程的两个误区：① 桌面日志**没有 eventFire 行 ≠ 没推帧**（桌面 rpc 日志
+> 只有 call/listen/register 三类）；② 反编译桌面 asar 得出「host 用连接自身身份、
+> 请求参数无关」的方向也不对——订阅参数差异虽被排除为主因，仍已顺手对齐。
+
+下表为当时的差异记录（保留作参考；订阅参数已按 zemote 最小集对齐）：
+
+| 参数 | zemote（可收到帧） | zcoder（已对齐） |
 |------|--------------------|--------------------|
 | `workspacePath` | ✅ | ✅ |
-| `workspaceIdentity` | ✅（有则传） | ❌ 未传 |
-| `runtimePolicy` | ❌ 不传（仅 sessions-index 传 `existing-only`） | ✅ 传 `existing-only` |
-| `connectionId` | ❌ 不传（只用于附件上传） | ✅ 传 |
-| `visibility` | ❌ 不传 | ❌ 也不传（`foreground` 时 `_subscribeFields` 会省略该键） |
+| `workspaceIdentity` | ✅（有则传） | ✅（已透传） |
+| `runtimePolicy` | ❌ 不传（仅 sessions-index 传 `existing-only`） | ✅ 已去掉 |
+| `connectionId` | ❌ 不传（只用于附件上传） | ✅ 已去掉 |
+| `visibility` | ❌ 不传 | ❌ 也不传（`foreground` 时省略该键） |
 | `sessionId` | ✅ | ✅ |
 
-建议把 conversation 订阅参数对齐成 zemote 的最小集 `{workspacePath,
-workspaceIdentity?, sessionId}` 试一次（`topic_session.dart` 的
-`_subscribeFields`/`subscribe()`）。若仍收不到，保持双通道方案（见 3.3）——功能
-不阻塞，只是队列刷新会慢一拍。
+落地时的订阅形状：conversation 的 subscribe/监听/resync/unsubscribe 一律用
+最小集 `{workspacePath, workspaceIdentity?, sessionId}`（`topic_session.dart` 的
+`_conversationScope`）；sessions-index/workspace-config 订阅保留
+`runtimePolicy: 'existing-only'`（zemote 同），监听参数同样走最小集。
 
 ### 3.3 轮询兜底（保底，但只作辅助）
 
 `conversationRowsRangeV4` 的响应在某些 host build 会把快照字段内联进来（本仓库
-`pollLatest` 已读 `control` / `meta` / `pendingInteractions`）。**请实测
-`result['queue']` 是否内联**：
-
-- 内联 → 在 `pollLatest` 里一并解析（见 4.4），队列即可走轮询通道；
-- 不内联 → 队列只能靠事件推送，此时 3.2 的排查必须完成。
-
-**合并规则**：事件推送帧为准（`state.updated` 完整反映服务端状态），轮询结果仅
-在推送缺失时补充；两者读的是同一个服务端状态，冲突时以最新 `toSeq` 为准。
+`pollLatest` 已读 `control` / `meta` / `pendingInteractions`，`queue` 内联与否
+未实测）。事件推送已打通后，队列以推送帧为准（`state.updated` 完整反映服务端
+状态），轮询结果仅在推送缺失时补充；两者读的是同一个服务端状态，冲突时以最新
+`toSeq` 为准。
 
 ---
 
@@ -657,5 +670,5 @@ onFollowupChanged: (mode) async {
 | followup 模式切换 UI | `lib/ui/chat_page.dart` | 2832–2855 |
 
 > 注：zemote 的 `reorderQueueItem` 也只停在协议层（无 UI）；它没做轮询兜底，
-> 队列全靠事件推送。若你的事件推送排查不通，4.4 的轮询通道就是 zemote 没有的
-> 兜底优势。
+> 队列全靠事件推送。zcoder 的事件推送已打通（2026-08-17），4.4 的轮询读内联
+> `queue` 仅作兜底保留。
