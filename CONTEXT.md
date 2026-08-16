@@ -58,4 +58,4 @@ _Avoid_: initial load, 全量/增量
 
 ## Boundary
 
-Out of scope for v1: usage/billing UI, browser control, terminal panel (xterm), Z.AI account login. The conversation UI is the product. Model provider management (model-provider channel) and model/thought selection for new sessions are in scope (added 2026-08-16); held-queue management is deferred until event push delivers queue state (see KNOWN_ISSUES #4).
+Out of scope for v1: usage/billing UI, browser control, terminal panel (xterm), Z.AI account login. The conversation UI is the product. Model provider management (model-provider channel) and model/thought selection for new sessions are in scope (added 2026-08-16); held-queue management is deferred until event push delivers queue state.

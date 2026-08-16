@@ -250,7 +250,7 @@ new/existing secondary menus.
   bridgeSessionId, generation+1, recoveryId carried over) with the
   transport/RPC/topic stack swapped in place; `recoveredStream` makes
   `ConversationController` resubscribe from a clean base. Command timeouts
-  retry once (fresh commandId) only while degraded. Addresses KNOWN_ISSUES #2.
+  retry once (fresh commandId) only while degraded.
 
 ### Push re-verification (stage 2)
 
@@ -258,7 +258,7 @@ clientHello changed to `clientKind: mobileApp` + `appVersion 3.6.5` (matching
 zemote's combo) and re-verified on the real device: the three
 `onDynamic*Frame` subscriptions still register host-side and
 `subscribeConversationV4` still succeeds, but **zero wire frames arrive** —
-push absence is independent of clientKind/appVersion. KNOWN_ISSUES #1 updated;
+push absence is independent of clientKind/appVersion;
 the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
 
 ### Conversation capabilities (stage 3)
@@ -267,7 +267,7 @@ the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
   destructive confirm / 切换模型); `compact` command added.
 - **retryTurn / editUserQuery** — long-press on user/assistant rows opens a
   row-action sheet (edit-and-resend dialog for user input). Commands carry
-  no CAS base (no snapshot revision without push; see KNOWN_ISSUES #1).
+  no CAS base (no snapshot revision without push).
 - **Slash commands & skills** — `prepareWorkspace` (zcode-task) and
   `skills.list` (skills channel) wrapped; typing `/` or `$` in the composer
   opens a filtering suggestion panel (inserts `'/name '` / `'$name '`).
@@ -282,13 +282,13 @@ the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
   `switchCollaborationMode` / `setFollowupMode` commands.
 - **Goal (operations only)** — `pauseGoal` / `resumeGoal` commands + session
   menu entries; the goal banner needs snapshot data (push-gated, see
-  KNOWN_ISSUES #4).
+  deferred).
 - **Model provider management** — `model-provider` channel wrapper
   (getAll/save/delete) + `ModelProvidersPage` (list, enable switch, add
   bottom-sheet form, delete confirm), entry in the new devices-page overflow
   menu. CONTEXT.md boundary updated.
 - **Deferred: held-queue UI** — snapshot-only data (no rowsRange inlining),
-  see KNOWN_ISSUES #4.
+  deferred.
 
 ### Task list (stage 4)
 
@@ -326,7 +326,7 @@ sheet) found and fixed:
   `mode.current` (verified: `{current: yolo}`). `SessionModelConfig.mode`
   parses it; both model sheets pre-select it and chips update optimistically.
   Followup mode was removed from the sheet (no settings/configOptions source;
-  snapshot-only, push-gated — see KNOWN_ISSUES #4/#10); the
+  snapshot-only, push-gated — deferred); the
   `setFollowupMode` command stays.
 - Input-bar label above the composer on the sessions page now shows the bare
   values (model · thought · mode) without the tune/close icons or the
