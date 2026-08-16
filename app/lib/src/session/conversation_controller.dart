@@ -27,6 +27,8 @@ class ConversationState {
   ContextUsage contextUsage;
   SessionModelConfig modelConfig;
   Map<String, Object?>? tokenUsage;
+  // readSession 的 session.status（实测取值 running | idle | error）。
+  String sessionStatus;
   final SplayTreeMap<int, ConversationRow> rows; // keyed by rowId
   bool needsOlderRows = false;
 
@@ -44,6 +46,7 @@ class ConversationState {
     ContextUsage? contextUsage,
     SessionModelConfig? modelConfig,
     this.tokenUsage,
+    this.sessionStatus = '',
   })  : control = control ?? const {},
         pendingInteractions = pendingInteractions ?? const [],
         pendingRequests = pendingRequests ?? const [],
@@ -64,6 +67,22 @@ class ConversationState {
   bool get canStop => canStopOrNull ?? false;
   String get phase => control['phase']?.toString() ?? '';
   bool get sessionEnded => control['sessionEnded'] as bool? ?? false;
+
+  /// Whether the agent has work in flight. sessionStatus comes from the
+  /// readSession poll (it stays "running" while a turn is alive, including
+  /// while it waits on an approval/question); control.canStop would be the
+  /// event-push snapshot's signal, unioned in for the day push works.
+  bool get isAgentRunning =>
+      sessionStatus == 'running' || (canStopOrNull ?? false);
+
+  /// The parts of a readSession response the poll merges outside of
+  /// settings/runtime/projection: the session's own status.
+  void applyReadSession(Map<String, Object?> result) {
+    final session = result['session'];
+    if (session is Map<String, Object?>) {
+      sessionStatus = session['status']?.toString() ?? '';
+    }
+  }
 
   void applySnapshot(ConversationSnapshot snapshot) {
     logEpoch = snapshot.logEpoch;
@@ -208,6 +227,7 @@ class ConversationController {
     try {
       final result = await channel.readSession(sessionId);
       final state = _state ??= ConversationState(sessionId: sessionId, logEpoch: '');
+      state.applyReadSession(result);
       final settings = result['settings'];
       if (settings is Map<String, Object?>) {
         state.modelConfig = SessionModelConfig.fromSettings(settings);
@@ -231,6 +251,18 @@ class ConversationController {
       }
       if (!_disposed && !_stateController.isClosed) _stateController.add(state);
     } catch (e) {
+      // A session the runtime has unloaded answers "Session is not active"
+      // forever after — it is definitely not running, so clear a stale
+      // running status instead of freezing the stop button on-screen.
+      if ('$e'.toLowerCase().contains('not active')) {
+        final state = _state;
+        if (state != null && state.sessionStatus == 'running') {
+          state.sessionStatus = 'idle';
+          if (!_disposed && !_stateController.isClosed) {
+            _stateController.add(state);
+          }
+        }
+      }
       debugPrint('[zremote] readSession poll failed: $e');
     }
   }

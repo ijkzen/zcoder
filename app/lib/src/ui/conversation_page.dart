@@ -207,7 +207,12 @@ class _ConversationPageState extends State<ConversationPage> {
             return const Center(child: CircularProgressIndicator());
           }
           final rows = state.orderedRows;
-          final runningTurn = _runningTurn(rows);
+          // The turn-header row's state stays "running" in the persisted log
+          // after the turn ends (the desktop's own web UI gates on session
+          // phase, not the row) — so the status line is shown only while
+          // readSession says the session is running.
+          final runningTurn =
+              state.isAgentRunning ? _runningTurn(rows) : null;
           // Smart scroll: while the user sits at the bottom, keep the latest
           // row visible as new rows stream in. Scrolling up disengages the
           // follow (see _onScroll); the floating button or scrolling back to
@@ -485,25 +490,25 @@ class _ConversationPageState extends State<ConversationPage> {
 
   Widget _buildInputBar() {
     final state = _state;
-    // Without event push the snapshot's control.canStop never arrives;
-    // fall back to "connected" (state exists) so the user can still interrupt.
-    final canStop = state == null
-        ? false
-        : (state.canStopOrNull ?? true);
+    // The interrupt button only exists while the agent is actually running:
+    // readSession's session.status (2s poll) is the authority; control.canStop
+    // only arrives with event-push snapshots and unions in if present.
+    final generating = state != null && state.isAgentRunning;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: IconButton.filledTonal(
-                tooltip: '打断',
-                onPressed: canStop ? _stop : null,
-                icon: const Icon(Icons.stop),
+            if (generating)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: IconButton.filledTonal(
+                  tooltip: '打断',
+                  onPressed: _stop,
+                  icon: const Icon(Icons.stop),
+                ),
               ),
-            ),
             Expanded(
               child: TextField(
                 controller: _inputController,
