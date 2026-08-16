@@ -224,3 +224,110 @@ command (same command envelope as sendText, proven; pressing it would have
 interrupted the live session under test) and relay-reconnect replay (test
 aborted when airplane mode cut the Wi-Fi adb link; the replay machinery is
 covered by unit tests).
+
+## v0.5.3 audit — zemote comparison batch (2026-08-16)
+
+Implemented after a feature/protocol comparison with the independent
+reimplementation [zemote](https://github.com/HumanAILoop/zemote). All UI
+follows the app's existing Material 3 patterns; low-frequency entries live in
+new/existing secondary menus.
+
+### Reliability (stage 1)
+
+- **Outbound fragment size fixed.** `sendMessage` now fragments at 512 KiB
+  raw (`ProtocolLimits.fragmentPayloadBytes`) — the previous 1 MiB raw chunks
+  produced base64 envelopes up to ~1.37 MiB, violating the desktop schema's
+  `dataBase64 ≤ 1 MiB` refine (`isCanonicalBase64` in chunk-L5EAZUIY.js).
+  Unit test asserts every frame's JSON envelope ≤ 1 MiB.
+- **Relay outbound queue.** `sendPayload` buffers up to 100 payloads while
+  unpaired and flushes on `matched` (previously dropped silently).
+- **KICKED handling.** `mapRelayErrorCode` maps `KICKED` to a dedicated
+  failure reason; the client stops auto-reconnecting and the notification
+  layer explains "已被其他设备接管".
+- **Bridge recovery loop.** `BridgeManager` degrades on transport fault /
+  `bridge-degraded` / relay drop; commands gate on `waitHealthy`; recovery
+  tries `workspace-reconnect-request` first, then a full reopen (new
+  bridgeSessionId, generation+1, recoveryId carried over) with the
+  transport/RPC/topic stack swapped in place; `recoveredStream` makes
+  `ConversationController` resubscribe from a clean base. Command timeouts
+  retry once (fresh commandId) only while degraded. Addresses KNOWN_ISSUES #2.
+
+### Push re-verification (stage 2)
+
+clientHello changed to `clientKind: mobileApp` + `appVersion 3.6.5` (matching
+zemote's combo) and re-verified on the real device: the three
+`onDynamic*Frame` subscriptions still register host-side and
+`subscribeConversationV4` still succeeds, but **zero wire frames arrive** —
+push absence is independent of clientKind/appVersion. KNOWN_ISSUES #1 updated;
+the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
+
+### Conversation capabilities (stage 3)
+
+- **Compact** — AppBar `tune` button became a session menu (压缩会话 with a
+  destructive confirm / 切换模型); `compact` command added.
+- **retryTurn / editUserQuery** — long-press on user/assistant rows opens a
+  row-action sheet (edit-and-resend dialog for user input). Commands carry
+  no CAS base (no snapshot revision without push; see KNOWN_ISSUES #1).
+- **Slash commands & skills** — `prepareWorkspace` (zcode-task) and
+  `skills.list` (skills channel) wrapped; typing `/` or `$` in the composer
+  opens a filtering suggestion panel (inserts `'/name '` / `'$name '`).
+- **Attachments** — `attachmentBegin/Chunk/Commit/ReadV4` on the topic
+  session (384 KiB chunks, sha256, resume from server progress, 20 MiB /
+  64-chunk caps); composer attach button (gallery via image_picker, files via
+  file_picker — compileSdk bumped to 36 for file_picker 12), upload progress
+  bar, staged-attachment chips sent with `sendText`. In-conversation image
+  rendering deferred (row schema unknown).
+- **Collaboration/followup mode** — `ModelConfigSheet` gained mode chips
+  (options from prepareWorkspace configOptions, desktop defaults fallback);
+  `switchCollaborationMode` / `setFollowupMode` commands.
+- **Goal (operations only)** — `pauseGoal` / `resumeGoal` commands + session
+  menu entries; the goal banner needs snapshot data (push-gated, see
+  KNOWN_ISSUES #4).
+- **Model provider management** — `model-provider` channel wrapper
+  (getAll/save/delete) + `ModelProvidersPage` (list, enable switch, add
+  bottom-sheet form, delete confirm), entry in the new devices-page overflow
+  menu. CONTEXT.md boundary updated.
+- **Deferred: held-queue UI** — snapshot-only data (no rowsRange inlining),
+  see KNOWN_ISSUES #4.
+
+### Task list (stage 4)
+
+- `Workspace` model parses `pinned` / `unreadAt` (were dropped).
+- Sessions page: Tasks/Pinned/Archived segmented tabs (archived tab has a
+  restore button; swipe actions hidden there), AppBar search toggle with
+  title filter, unread badges (bold + dot, cleared on session open via
+  `setTaskUnread(false)`), pinned-first ordering.
+- **Protocol log page** — `zlog` gained an unconditional 1000-entry ring
+  buffer + stream; `ProtocolLogPage` (live tail, copy-all, clear) in the
+  devices-page overflow menu.
+
+## v0.5.4 audit — device-testing fixes (2026-08-17)
+
+Real-device regression round (cold-start connect → open project → model
+sheet) found and fixed:
+
+- **Phase-stream delivery race (open-project always failed on first tap).**
+  `StreamController.broadcast()` is async by default: `_setPhase(ready)`
+  updated the bridge's own `_phase` synchronously but the `ready` event only
+  reached `AppController` in a later microtask, so `_open`'s
+  `app.phase != ready` check right after `selectWorkspace` read the stale
+  `connecting` and showed "打开项目失败：未知错误" (second tap always worked).
+  Fixed with `broadcast(sync: true)` on the bridge phase stream (and the
+  relay state stream — an async broadcast would let `_waitForRelayReady`
+  miss an already-dispatched `matched` event). Probe-log evidence:
+  `bridge done, phase=CONNECTING → phase check failed → phase: READY`.
+- **Workspace-list merge collapsed sessions.** `mergedEntries` deduped by
+  workspace key, but every task of one project shares its path — only the
+  first task survived, so each project showed one session. Tasks are now all
+  kept; workspace entries fill uncovered keys only.
+- **Collaboration-mode current value.** `prepareWorkspace` configOptions
+  carry `mode`/`thought_level`/`model` (no `followupMode`); the authoritative
+  current mode lives in `readWorkspaceState`/`readSession` settings as
+  `mode.current` (verified: `{current: yolo}`). `SessionModelConfig.mode`
+  parses it; both model sheets pre-select it and chips update optimistically.
+  Followup mode was removed from the sheet (no settings/configOptions source;
+  snapshot-only, push-gated — see KNOWN_ISSUES #4/#10); the
+  `setFollowupMode` command stays.
+- Input-bar label above the composer on the sessions page now shows the bare
+  values (model · thought · mode) without the tune/close icons or the
+  "新会话将使用" caption.
