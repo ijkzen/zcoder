@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# Flutter / Dart (generated)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+*.iml
+.idea/
+.metadata
+android/local.properties
+android/.gradle/
+android/.kotlin/
+android/app/build/
+
+# Release artifacts (reproducible from source)
+*.apk
+*.aab
+
+# Verification screenshots
+.verify/
+screen*.png
+s*.png
