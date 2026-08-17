@@ -220,7 +220,7 @@ class _SessionsPageState extends State<SessionsPage> {
     }
   }
 
-  // ---------- Swipe actions: rename / archive ----------
+  // ---------- 条目「更多」菜单操作：重命名 / 归档 ----------
 
   Future<void> _renameSession(Workspace session, String currentTitle) async {
     final result = await showDialog<String>(
@@ -751,16 +751,21 @@ class _SessionsPageState extends State<SessionsPage> {
                                             ? scheme.primary
                                             : scheme.outline,
                                       ))
-                              : CircleAvatar(
-                                  backgroundColor: running
-                                      ? scheme.primaryContainer
-                                      : scheme.surfaceContainerHighest,
-                                  child: Icon(
-                                    running ? Icons.play_arrow : Icons.check,
-                                    size: 18,
-                                    color: running
-                                        ? scheme.onPrimaryContainer
-                                        : scheme.onSurfaceVariant,
+                              : SizedBox(
+                                  width: 40,
+                                  height: 40,
+                                  child: Center(
+                                    child: Container(
+                                      // 运行中=蓝色圆点，已完成=绿色圆点（同尺寸）。
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: running
+                                            ? Colors.blue
+                                            : Colors.green,
+                                      ),
+                                    ),
                                   ),
                                 ),
                           title: Text(
@@ -807,8 +812,16 @@ class _SessionsPageState extends State<SessionsPage> {
                                           PopupMenuButton<String>(
                                             tooltip: '更多操作',
                                             onSelected: (value) {
-                                              if (value == 'pin') {
-                                                _togglePin(s);
+                                              switch (value) {
+                                                case 'pin':
+                                                  _togglePin(s);
+                                                  break;
+                                                case 'rename':
+                                                  _renameSession(s, title);
+                                                  break;
+                                                case 'archive':
+                                                  _archiveSession(s, title);
+                                                  break;
                                               }
                                             },
                                             itemBuilder: (context) => [
@@ -829,6 +842,33 @@ class _SessionsPageState extends State<SessionsPage> {
                                                       EdgeInsets.zero,
                                                 ),
                                               ),
+                                              PopupMenuItem(
+                                                value: 'rename',
+                                                child: const ListTile(
+                                                  leading: Icon(
+                                                    Icons.edit_outlined,
+                                                    size: 20,
+                                                  ),
+                                                  title: Text('重命名'),
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
+                                                ),
+                                              ),
+                                              // 运行中会话不可归档（TC-SES-101），
+                                              // 菜单不出现「归档」项。
+                                              if (!running)
+                                                PopupMenuItem(
+                                                  value: 'archive',
+                                                  child: const ListTile(
+                                                    leading: Icon(
+                                                      Icons.archive_outlined,
+                                                      size: 20,
+                                                    ),
+                                                    title: Text('归档'),
+                                                    contentPadding:
+                                                        EdgeInsets.zero,
+                                                  ),
+                                                ),
                                             ],
                                           ),
                                         ],
@@ -873,15 +913,7 @@ class _SessionsPageState extends State<SessionsPage> {
                                 }),
                         ),
                       );
-                      if (_multiSelect || _tab == 2) return card;
-                      return _SwipeActionTile(
-                        onRename: () => _renameSession(s, title),
-                        // Running sessions can't be archived (only renamed).
-                        onArchive: running
-                            ? null
-                            : () => _archiveSession(s, title),
-                        child: card,
-                      );
+                      return card;
                     },
                   );
                 },
@@ -971,174 +1003,3 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
   }
 }
 
-/// A list tile with iOS-style swipe actions: the buttons hang off the card's
-/// right edge, parked beyond the tile's clip (invisible), and a left-drag
-/// translates card + buttons together so they are pulled into view by the
-/// card itself. A null [onArchive] drops the archive button (running
-/// sessions can only be renamed).
-class _SwipeActionTile extends StatefulWidget {
-  final Widget child;
-  final VoidCallback onRename;
-  final VoidCallback? onArchive;
-
-  const _SwipeActionTile({
-    required this.child,
-    required this.onRename,
-    this.onArchive,
-  });
-
-  @override
-  State<_SwipeActionTile> createState() => _SwipeActionTileState();
-}
-
-class _SwipeActionTileState extends State<_SwipeActionTile> {
-  static const _actionWidth = 72.0;
-  static const _gap = 8.0;
-
-  double get _revealExtent =>
-      widget.onArchive == null ? _actionWidth : _actionWidth * 2 + _gap;
-
-  double _drag = 0; // current offset, 0 (closed) … -_revealExtent (open)
-  bool _open = false;
-  bool _dragging = false;
-
-  void _onDragUpdate(DragUpdateDetails details) {
-    setState(() {
-      _dragging = true;
-      _drag = (_drag + details.delta.dx).clamp(-_revealExtent, 0.0).toDouble();
-    });
-  }
-
-  void _onDragEnd(DragEndDetails details) {
-    setState(() {
-      _dragging = false;
-      _open = _drag < -_revealExtent / 2;
-    });
-  }
-
-  void _close() => setState(() {
-    _open = false;
-    _drag = 0;
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final tileWidth = constraints.maxWidth;
-        final target = _dragging ? _drag : (_open ? -_revealExtent : 0.0);
-        // Two layers, both within the tile's own bounds (a single wide strip
-        // would be unreachable: RenderBox.hitTest rejects positions outside
-        // its size). The card slides left; the action strip slides in from
-        // beyond the right edge by the same amount, staying flush with the
-        // card's right edge — iOS-style "pulled out by the card" motion.
-        return ClipRect(
-          child: SizedBox(
-            width: tileWidth,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragUpdate: _onDragUpdate,
-              onHorizontalDragEnd: _onDragEnd,
-              // While open the card absorbs taps (first tap closes the actions
-              // instead of opening the session); while closed the ListTile's
-              // own tap recognizer, being deeper, wins the arena.
-              onTap: _open ? _close : null,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(end: _revealExtent + target),
-                      duration: _dragging
-                          ? Duration.zero
-                          : const Duration(milliseconds: 200),
-                      curve: Curves.easeOut,
-                      builder: (context, actionOffset, child) =>
-                          Transform.translate(
-                            offset: Offset(actionOffset, 0),
-                            child: child,
-                          ),
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _actionButton(
-                              icon: Icons.edit_outlined,
-                              label: '重命名',
-                              backgroundColor: scheme.secondaryContainer,
-                              foregroundColor: scheme.onSecondaryContainer,
-                              onTap: () {
-                                _close();
-                                widget.onRename();
-                              },
-                            ),
-                            if (widget.onArchive != null) ...[
-                              const SizedBox(width: _gap),
-                              _actionButton(
-                                icon: Icons.archive_outlined,
-                                label: '归档',
-                                backgroundColor: scheme.errorContainer,
-                                foregroundColor: scheme.onErrorContainer,
-                                onTap: () {
-                                  _close();
-                                  widget.onArchive!();
-                                },
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(end: target),
-                    duration: _dragging
-                        ? Duration.zero
-                        : const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    builder: (context, offset, child) => Transform.translate(
-                      offset: Offset(offset, 0),
-                      child: child,
-                    ),
-                    child: AbsorbPointer(absorbing: _open, child: widget.child),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _actionButton({
-    required IconData icon,
-    required String label,
-    required Color backgroundColor,
-    required Color foregroundColor,
-    required VoidCallback onTap,
-  }) {
-    return SizedBox(
-      width: _actionWidth,
-      child: Material(
-        color: backgroundColor,
-        child: InkWell(
-          onTap: onTap,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 20, color: foregroundColor),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                style: TextStyle(fontSize: 12, color: foregroundColor),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
