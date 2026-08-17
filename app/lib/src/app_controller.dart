@@ -695,6 +695,7 @@ class AppController extends ChangeNotifier {
           provider: current.provider,
           model: current.model,
           thoughtLevel: current.thoughtLevel,
+          mode: current.mode,
           availableModels: ws.availableModels,
           availableThoughtLevels: ws.availableThoughtLevels,
         );
