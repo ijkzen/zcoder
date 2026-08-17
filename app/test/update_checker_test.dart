@@ -110,12 +110,16 @@ void main() {
     test('handles multi-architecture APK naming', () {
       final assets = [
         apkAsset(
-          name: 'app-arm64-v8a.apk',
-          url: 'https://github.com/ijkzen/zcoder/releases/download/v0.5.0/app-arm64-v8a.apk',
+          name: 'zcode_remote-arm64-v8a-v0.5.0.apk',
+          url: 'https://github.com/ijkzen/zcoder/releases/download/v0.5.0/zcode_remote-arm64-v8a-v0.5.0.apk',
         ),
         apkAsset(
-          name: 'app-armeabi-v7a.apk',
-          url: 'https://github.com/ijkzen/zcoder/releases/download/v0.5.0/app-armeabi-v7a.apk',
+          name: 'zcode_remote-armv7-v0.5.0.apk',
+          url: 'https://github.com/ijkzen/zcoder/releases/download/v0.5.0/zcode_remote-armv7-v0.5.0.apk',
+        ),
+        apkAsset(
+          name: 'zcode_remote-universal-v0.5.0.apk',
+          url: 'https://github.com/ijkzen/zcoder/releases/download/v0.5.0/zcode_remote-universal-v0.5.0.apk',
         ),
       ];
 
@@ -123,7 +127,19 @@ void main() {
       final arm64Apk = assets.firstWhere(
         (a) => (a['name'] as String).contains('arm64-v8a'),
       );
-      expect(arm64Apk['name'], 'app-arm64-v8a.apk');
+      expect(arm64Apk['name'], 'zcode_remote-arm64-v8a-v0.5.0.apk');
+
+      // armv7 should be found on older devices.
+      final armv7Apk = assets.firstWhere(
+        (a) => (a['name'] as String).contains('armv7'),
+      );
+      expect(armv7Apk['name'], 'zcode_remote-armv7-v0.5.0.apk');
+
+      // universal should be the fallback.
+      final universalApk = assets.firstWhere(
+        (a) => (a['name'] as String).contains('universal'),
+      );
+      expect(universalApk['name'], 'zcode_remote-universal-v0.5.0.apk');
     });
 
     test('parses GitHub releases JSON array', () {

@@ -49,9 +49,26 @@ jobs:
           echo "date=$(date -u '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
           echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Build release APK (arm64)
+      - name: Build release APKs (arm64, armv7, universal)
         working-directory: app
-        run: flutter build apk --release --target-platform android-arm64
+        run: |
+          TAG="${{ steps.versions.outputs.tag }}"
+          OUT_DIR="build/app/outputs/flutter-apk"
+
+          # Build arm64 only
+          flutter build apk --release --target-platform android-arm64 -PabiFilter=arm64-v8a
+          mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-arm64-v8a-${TAG}.apk"
+
+          # Build armv7 only
+          flutter build apk --release --target-platform android-arm -PabiFilter=armeabi-v7a
+          mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-armv7-${TAG}.apk"
+
+          # Build universal (all ABIs)
+          flutter build apk --release
+          mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-universal-${TAG}.apk"
+
+          echo "=== Built APKs ==="
+          ls -lh "$OUT_DIR"/*.apk
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v3
@@ -60,7 +77,10 @@ jobs:
           name: ${{ steps.versions.outputs.tag }}
           prerelease: false
           generate_release_notes: true
-          files: app/build/app/outputs/flutter-apk/app-release.apk
+          files: |
+            app/build/app/outputs/flutter-apk/zcode_remote-arm64-v8a-${{ steps.versions.outputs.tag }}.apk
+            app/build/app/outputs/flutter-apk/zcode_remote-armv7-${{ steps.versions.outputs.tag }}.apk
+            app/build/app/outputs/flutter-apk/zcode_remote-universal-${{ steps.versions.outputs.tag }}.apk
           body: |
             ## ${{ steps.versions.outputs.tag }}
 
@@ -70,5 +90,13 @@ jobs:
             | Commit | [`${{ steps.versions.outputs.commit }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
             | Flutter | ${{ steps.versions.outputs.flutter }} |
 
-            > 仅包含 arm64 架构（覆盖绝大多数现代 Android 设备）。
+            ### APK 变体说明
+
+            | 文件 | 架构 | 推荐场景 |
+            |------|------|----------|
+            | `zcode_remote-arm64-v8a-*.apk` | arm64 | **推荐** - 覆盖绝大多数现代 Android 设备（Android 5.0+） |
+            | `zcode_remote-armv7-*.apk` | armv7 | 兼容老旧 32 位设备 |
+            | `zcode_remote-universal-*.apk` | 通用 | 包含所有架构，体积最大，适用于不确定设备架构时 |
+
             > 可在应用内「设置 → 检查更新」直接下载安装，也可手动下载 APK 安装。
+            > 已启用 R8 代码压缩和资源缩减。

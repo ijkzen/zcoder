@@ -257,6 +257,12 @@ class UpdateChecker {
 
   /// Picks the best APK asset from a release, matching the device ABI.
   /// Falls back to the sole .apk file if there's only one.
+  ///
+  /// Naming convention:
+  ///   - `zcode_remote-arm64-v8a-*.apk`  → arm64 only
+  ///   - `zcode_remote-armv7-*.apk`      → armv7 only
+  ///   - `zcode_remote-universal-*.apk`  → all ABIs
+  ///   - `app-release.apk`               → legacy single APK
   Future<AssetInfo?> _pickAsset(dynamic release) async {
     final assets = release['assets'] as List<dynamic>;
     final apks = assets
@@ -273,7 +279,16 @@ class UpdateChecker {
 
     // Multiple APKs — match by device ABI.
     final abis = await _getDeviceAbis();
+
+    // Build a priority list: device-native ABIs first, then universal, then
+    // whatever is left.
+    final abiPriority = <String>[];
     for (final abi in abis) {
+      if (!abiPriority.contains(abi)) abiPriority.add(abi);
+    }
+    if (!abiPriority.contains('universal')) abiPriority.add('universal');
+
+    for (final abi in abiPriority) {
       for (final apk in apks) {
         final name = (apk['name'] as String).toLowerCase();
         if (name.contains(abi)) {
@@ -295,12 +310,14 @@ class UpdateChecker {
   }
 
   /// Reads Build.SUPPORTED_ABIS from the Android platform.
-  /// Falls back to ['arm64-v8a'] on non-Android or on error.
+  /// Returns a list like `['arm64-v8a', 'armeabi-v7a', 'armeabi']`.
+  /// Falls back to `['arm64-v8a']` on non-Android or on error.
   Future<List<String>> _getDeviceAbis() async {
     if (!Platform.isAndroid) return ['arm64-v8a'];
     try {
       final result = await _platform.invokeMethod<List>('getSupportedAbis');
-      if (result != null) {
+      if (result != null && result.isNotEmpty) {
+        debugPrint('[UpdateChecker] Device ABIs: $result');
         return result.cast<String>();
       }
     } catch (e) {

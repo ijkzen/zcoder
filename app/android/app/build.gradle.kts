@@ -13,6 +13,11 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// ABI filtering: pass -PabiFilter=arm64-v8a to build for a single architecture.
+// Without this flag, all architectures are included (universal build).
+val abiFilter = project.findProperty("abiFilter")?.toString()
+val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+
 android {
     namespace = "dev.ijkzen.zcode_remote"
     // file_picker (attachment picker) requires compileSdk 36.
@@ -27,18 +32,17 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "dev.ijkzen.zcode_remote"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
-        // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
-        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
-        // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        if (abiFilter != null) {
+            ndk {
+                abiFilters += abiFilter.split(",")
+            }
+        }
     }
 
     signingConfigs {
@@ -57,6 +61,24 @@ android {
                 releaseSigningConfig
             } else {
                 signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // packaging.jniLibs excludes pre-built .so from dependencies (e.g. ML Kit)
+    // that ndk.abiFilters alone cannot reach.
+    if (abiFilter != null) {
+        val targetAbis = abiFilter.split(",")
+        val excludedAbis = allAbis.filter { it !in targetAbis }
+        packaging {
+            jniLibs {
+                excludes += excludedAbis.map { "lib/$it/**" }
             }
         }
     }
