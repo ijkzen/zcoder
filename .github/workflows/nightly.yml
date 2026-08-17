@@ -1,0 +1,56 @@
+name: Nightly Release
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "0 2 * * *"       # daily at 02:00 UTC (10:00 CST)
+  workflow_dispatch:           # 允许手动触发
+
+permissions:
+  contents: write              # 创建/更新 release 所需
+
+jobs:
+  build:
+    name: Build & Publish Nightly APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        id: flutter
+        with:
+          channel: stable
+          cache: true
+
+      - name: Get versions
+        id: versions
+        working-directory: app
+        run: |
+          echo "flutter=$(flutter --version | head -1)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK (arm64 only)
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build — ${{ steps.versions.outputs.date }}
+          prerelease: true
+          generate_release_notes: false
+          files: app/build/app/outputs/flutter-apk/app-release.apk
+          body: |
+            **Nightly Build**
+
+            | 字段 | 值 |
+            |---|---|
+            | 日期 | ${{ steps.versions.outputs.date }} |
+            | Commit | [`${{ steps.versions.outputs.commit }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+            | Flutter | ${{ steps.versions.outputs.flutter }} |
+
+            > ⚠️ 预发布版本，来自 master 分支最新代码，可能不稳定。
+            > 仅包含 arm64 架构（覆盖绝大多数现代 Android 设备）。
