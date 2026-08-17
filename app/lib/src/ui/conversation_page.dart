@@ -2246,11 +2246,15 @@ class _DetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       title: Text(title, style: Theme.of(context).textTheme.titleSmall),
+      contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
       content: SizedBox(
         width: double.maxFinite,
         child: SingleChildScrollView(child: child),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
