@@ -14,6 +14,7 @@ import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'request_sheet.dart';
 import 'model_config_sheet.dart';
+import 'markdown_skill_badge.dart';
 import 'mono_text.dart';
 import 'theme.dart';
 
@@ -1631,6 +1632,34 @@ class _LongPressRowState extends State<_LongPressRow> {
   }
 }
 
+/// Shared markdown style sheet: assistant text (light/dark aware) and the
+/// user bubble (which additionally registers the skill badge rule).
+MarkdownStyleSheet _markdownSheet(BuildContext context, Color textColor) {
+  final scheme = Theme.of(context).colorScheme;
+  final theme = Theme.of(context);
+  return MarkdownStyleSheet.fromTheme(theme).copyWith(
+    p: theme.textTheme.bodyMedium?.copyWith(color: textColor, height: 1.55),
+    code: TextStyle(
+      fontFamily: 'monospace',
+      fontSize: 12.5,
+      color: scheme.onSurface,
+      backgroundColor: scheme.surfaceContainerHigh,
+    ),
+    codeblockPadding: const EdgeInsets.all(10),
+    codeblockDecoration: BoxDecoration(
+      color: scheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    blockquoteDecoration: BoxDecoration(
+      border: Border(
+        left: BorderSide(color: scheme.outlineVariant, width: 3),
+      ),
+    ),
+    blockquotePadding: const EdgeInsets.only(left: 12),
+    listIndent: 20,
+  );
+}
+
 class _MarkdownText extends StatelessWidget {
   final String text;
   final Color color;
@@ -1638,30 +1667,11 @@ class _MarkdownText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final theme = Theme.of(context);
-    final styleSheet = MarkdownStyleSheet.fromTheme(theme).copyWith(
-      p: theme.textTheme.bodyMedium?.copyWith(color: color, height: 1.55),
-      code: TextStyle(
-        fontFamily: 'monospace',
-        fontSize: 12.5,
-        color: scheme.onSurface,
-        backgroundColor: scheme.surfaceContainerHigh,
-      ),
-      codeblockPadding: const EdgeInsets.all(10),
-      codeblockDecoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      blockquoteDecoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: scheme.outlineVariant, width: 3),
-        ),
-      ),
-      blockquotePadding: const EdgeInsets.only(left: 12),
-      listIndent: 20,
+    return MarkdownBody(
+      data: text,
+      selectable: true,
+      styleSheet: _markdownSheet(context, color),
     );
-    return MarkdownBody(data: text, selectable: true, styleSheet: styleSheet);
   }
 }
 
@@ -1704,13 +1714,24 @@ class _UserBubble extends StatelessWidget {
                 if (text.isNotEmpty) const SizedBox(height: 6),
               ],
               if (text.isNotEmpty)
-                SelectableText(
-                  text,
-                  style: TextStyle(
-                    color: scheme.onPrimaryContainer,
-                    height: 1.4,
-                  ),
-                ),
+                hasSkillInvoke(text)
+                    ? MarkdownBody(
+                        data: text,
+                        selectable: true,
+                        styleSheet: _markdownSheet(
+                          context,
+                          scheme.onPrimaryContainer,
+                        ),
+                        extensionSet: skillBadgeExtensionSet,
+                        builders: {'skillBadge': SkillBadgeBuilder()},
+                      )
+                    : SelectableText(
+                        text,
+                        style: TextStyle(
+                          color: scheme.onPrimaryContainer,
+                          height: 1.4,
+                        ),
+                      ),
             ],
           ),
         ),
