@@ -21,6 +21,25 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > app/android/app/release-key.jks
+
+      - name: Create key.properties
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_KEY_PASSWORD: ${{ secrets.KEY_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          cat > app/android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=release-key.jks
+          EOF
+
       - name: Get versions
         id: versions
         working-directory: app
