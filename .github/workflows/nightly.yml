@@ -36,7 +36,7 @@ jobs:
         run: flutter build apk --release --target-platform android-arm64
 
       - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
           name: Nightly Build — ${{ steps.versions.outputs.date }}
