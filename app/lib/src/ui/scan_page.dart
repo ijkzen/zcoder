@@ -59,14 +59,16 @@ class _ScanPageState extends State<ScanPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Returning from the system settings with the permission freshly granted
-    // must bring the preview back without a manual page reopen.
+    // When the app resumes, restart the camera if it is not running.
+    // This covers three scenarios:
+    // 1. First-time permission grant: the permission dialog pauses the Activity;
+    //    MobileScanner's internal resume assumes the camera was already running
+    //    (it wasn't — permission hadn't been granted yet), so nobody restarts it.
+    // 2. Returning from system settings after manually granting permission.
+    // 3. Any other lifecycle-related camera stop (e.g. picture-in-picture).
     if (state != AppLifecycleState.resumed) return;
-    final error = _controller.value.error;
-    if (error?.errorCode == MobileScannerErrorCode.permissionDenied) {
-      Permission.camera.isGranted.then((granted) {
-        if (granted && mounted) unawaited(_controller.start());
-      });
+    if (mounted && !_controller.value.isRunning) {
+      unawaited(_controller.start());
     }
   }
 
