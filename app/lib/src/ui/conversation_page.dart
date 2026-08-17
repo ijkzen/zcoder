@@ -58,6 +58,21 @@ class _ConversationPageState extends State<ConversationPage> {
 
   ConversationState? _state;
 
+  /// 会话是否已有可展示的计划（ExitPlanMode）——「计划」菜单项只在该会话
+  /// 确实存在计划时出现。conversationPlansV4 是权威来源（计划 sheet 展示
+  /// 同一份数据），打开会话后预取一次；已加载行中的 ExitPlanMode 工具调用
+  /// 兜底覆盖预取之后新出现的计划。
+  bool _hasPlans = false;
+  bool _plansFetched = false;
+
+  bool get _sessionHasPlans {
+    if (_hasPlans) return true;
+    final state = _state;
+    if (state == null) return false;
+    return state.orderedRows
+        .any((r) => r is ToolCallRow && r.toolName == 'ExitPlanMode');
+  }
+
   // Pending attachments: uploaded descriptors `{ref, fileName, mime, bytes}`
   // shown as chips above the composer and sent along with the next text.
   final _attachments = <Map<String, Object?>>[];
@@ -84,7 +99,10 @@ class _ConversationPageState extends State<ConversationPage> {
   /// open RequestSheet) in sync outside the build phase.
   void _onAppTick() {
     final state = widget.app.conversation?.state;
-    if (state != null) _syncRequestNotifiers(state);
+    if (state != null) {
+      _syncRequestNotifiers(state);
+      if (!_plansFetched) _ensurePlansFetched();
+    }
   }
 
   Future<void> _open() async {
@@ -289,14 +307,26 @@ class _ConversationPageState extends State<ConversationPage> {
             onPressed: _showTokenUsageSheet,
             icon: const Icon(Icons.data_usage),
           ),
+          // 压缩会话是会话级状态改写：从更多菜单移出为独立入口，运行中
+          // 禁用（与桌面端一致：改写会话状态需先中断）。
+          ListenableBuilder(
+            listenable: widget.app,
+            builder: (context, _) {
+              final running =
+                  widget.app.conversation?.state?.isAgentRunning ?? false;
+              return IconButton(
+                tooltip: running ? '压缩会话（运行中不可用）' : '压缩会话',
+                onPressed: running ? null : _confirmCompact,
+                icon: const Icon(Icons.compress),
+              );
+            },
+          ),
           PopupMenuButton<String>(
             tooltip: '会话菜单',
             onSelected: (value) {
               switch (value) {
                 case 'stop':
                   _stop();
-                case 'compact':
-                  _confirmCompact();
                 case 'model':
                   _showModelConfigSheet();
                 case 'pauseGoal':
@@ -307,8 +337,6 @@ class _ConversationPageState extends State<ConversationPage> {
                   _showPlansSheet();
               }
             },
-            // Session-level state rewrites (compact) are refused while the
-            // agent runs — interrupt first.
             itemBuilder: (context) {
               final running = _state?.isAgentRunning ?? false;
               return [
@@ -324,15 +352,6 @@ class _ConversationPageState extends State<ConversationPage> {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                PopupMenuItem(
-                  value: 'compact',
-                  enabled: !running,
-                  child: ListTile(
-                    leading: const Icon(Icons.compress),
-                    title: Text(running ? '压缩会话（运行中不可用）' : '压缩会话'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
                 const PopupMenuItem(
                   value: 'model',
                   child: ListTile(
@@ -363,14 +382,18 @@ class _ConversationPageState extends State<ConversationPage> {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                const PopupMenuItem(
-                  value: 'plans',
-                  child: ListTile(
-                    leading: Icon(Icons.assignment_outlined),
-                    title: Text('计划'),
-                    contentPadding: EdgeInsets.zero,
+                // 计划仅在会话存在可展示的计划（conversationPlansV4 中有
+                // ExitPlanMode 记录，或已加载行里出现 ExitPlanMode 工具
+                // 调用）时出现，避免空计划页入口。
+                if (_sessionHasPlans)
+                  const PopupMenuItem(
+                    value: 'plans',
+                    child: ListTile(
+                      leading: Icon(Icons.assignment_outlined),
+                      title: Text('计划'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
               ];
             },
           ),
@@ -604,6 +627,34 @@ class _ConversationPageState extends State<ConversationPage> {
     );
   }
 
+  /// 预取一次计划历史用于「计划」菜单项的条件显示；失败静默（由
+  /// ExitPlanMode 行扫描兜底，不阻塞页面）。
+  Future<void> _ensurePlansFetched() async {
+    if (_plansFetched) return;
+    _plansFetched = true;
+    try {
+      final plans = await widget.app
+          .fetchPlans()
+          .timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      final raw = plans['plans'];
+      final list = raw is List
+          ? raw.whereType<Map<String, Object?>>()
+          : const <Map<String, Object?>>[];
+      setState(() {
+        _hasPlans = list.any((row) {
+          final status = row['status']?.toString();
+          return row['toolName']?.toString() == 'ExitPlanMode' &&
+              (status == 'success' ||
+                  status == 'error' ||
+                  status == 'cancelled');
+        });
+      });
+    } catch (_) {
+      // 预取失败不报错：有 ExitPlanMode 行时「计划」菜单项仍会出现。
+    }
+  }
+
   /// Fetches the session's plan history (`conversationPlansV4` — the
   /// ExitPlanMode tool-call rows) and shows them in a sheet.
   Future<void> _showPlansSheet() async {
@@ -742,6 +793,8 @@ class _ConversationPageState extends State<ConversationPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('压缩会话'),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+        contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
         content: const Text('将把此前的对话历史总结为摘要，以节省上下文空间。压缩后旧消息不再保留，此操作不可撤销。'),
         actions: [
           TextButton(
@@ -1359,10 +1412,23 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Row long-press actions (retry / edit) ----------
 
+  /// The newest user-sent message in the current log. Only it supports
+  /// edit-and-resend; older user rows long-press as a no-op.
+  UserInputRow? get _lastUserInputRow {
+    final rows = _state?.orderedRows;
+    if (rows == null) return null;
+    for (final row in rows.reversed) {
+      if (row is UserInputRow) return row;
+    }
+    return null;
+  }
+
   /// Long-press on a user or assistant row offers row-target commands.
   Future<void> _showRowActions(ConversationRow row) async {
+    final canEditResend =
+        row is UserInputRow && row.rowId == _lastUserInputRow?.rowId;
     final List<Widget> actions = [
-      if (row is UserInputRow)
+      if (canEditResend)
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text('编辑重发'),
@@ -1431,6 +1497,8 @@ class _ConversationPageState extends State<ConversationPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('编辑重发'),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+        contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -2246,7 +2314,6 @@ class _DetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       title: Text(title, style: Theme.of(context).textTheme.titleSmall),
       contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
@@ -2254,7 +2321,6 @@ class _DetailDialog extends StatelessWidget {
         width: double.maxFinite,
         child: SingleChildScrollView(child: child),
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -2869,6 +2935,8 @@ class _QueueBar extends StatelessWidget {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('编辑排队消息'),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+        contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
         content: TextField(
           controller: controller,
           autofocus: true,
