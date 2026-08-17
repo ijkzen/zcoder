@@ -1007,7 +1007,11 @@ class AppController extends ChangeNotifier {
           DateTime.now().difference(last) > _stallThreshold &&
           !_stallNotified) {
         _stallNotified = true;
-        hook({'type': 'stall', 'sessionId': state.sessionId});
+        hook({
+          'type': 'stall',
+          'sessionId': state.sessionId,
+          'workspaceKey': _bridge?.activeWorkspace?.workspaceKey,
+        });
       }
     });
   }

@@ -130,19 +130,25 @@ class NotificationService {
           _ => null,
         };
         if (done != null) {
+          final sessionId = event['sessionId']?.toString() ?? '';
+          final workspaceKey = event['workspaceKey']?.toString() ?? '';
           _local.show(
             id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
             title: done,
             body: '会话 ${event['sessionId']}',
             notificationDetails: _channelQuiet,
+            payload: '$_approvalPrefix$workspaceKey|$sessionId',
           );
         }
       case 'stall':
+        final sessionId = event['sessionId']?.toString() ?? '';
+        final workspaceKey = event['workspaceKey']?.toString() ?? '';
         _local.show(
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           title: 'Agent 已停滞',
           body: '会话 ${event['sessionId']} 长时间没有新输出，去看看？',
           notificationDetails: _channelQuiet,
+          payload: '$_approvalPrefix$workspaceKey|$sessionId',
         );
     }
   }
