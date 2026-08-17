@@ -847,10 +847,26 @@ class _SessionsPageState extends State<SessionsPage> {
                       }),
                       icon: const Icon(Icons.checklist),
                     ),
-                  IconButton(
-                    tooltip: '新建会话的模型与思考等级',
-                    onPressed: _configLoading ? null : _pickModelConfig,
-                    icon: const Icon(Icons.tune),
+                  PopupMenuButton<String>(
+                    tooltip: '更多',
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'model':
+                          if (!_configLoading) _pickModelConfig();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: 'model',
+                        enabled: !_configLoading,
+                        child: const ListTile(
+                          leading: Icon(Icons.tune, size: 20),
+                          title: Text('模型与思考等级'),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
         ),
