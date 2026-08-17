@@ -293,6 +293,8 @@ class _ConversationPageState extends State<ConversationPage> {
             tooltip: '会话菜单',
             onSelected: (value) {
               switch (value) {
+                case 'stop':
+                  _stop();
                 case 'compact':
                   _confirmCompact();
                 case 'model':
@@ -310,6 +312,18 @@ class _ConversationPageState extends State<ConversationPage> {
             itemBuilder: (context) {
               final running = _state?.isAgentRunning ?? false;
               return [
+                // 打断是回合级操作（运行中允许），且只在 agent 实际运行时
+                // 出现：readSession 的 session.status（2s 轮询）是权威来源，
+                // control.canStop 只随事件推送快照到达并参与判断。
+                if (running)
+                  PopupMenuItem(
+                    value: 'stop',
+                    child: ListTile(
+                      leading: const Icon(Icons.stop),
+                      title: const Text('打断'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                 PopupMenuItem(
                   value: 'compact',
                   enabled: !running,
@@ -1197,7 +1211,6 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   Widget _buildInputBar() {
-    final state = _state;
     // Archived sessions are read-only: history browsable, composer replaced
     // by a banner (restore from the session list to continue).
     if (widget.archived) {
@@ -1225,10 +1238,6 @@ class _ConversationPageState extends State<ConversationPage> {
         ),
       );
     }
-    // The interrupt button only exists while the agent is actually running:
-    // readSession's session.status (2s poll) is the authority; control.canStop
-    // only arrives with event-push snapshots and unions in if present.
-    final generating = state != null && state.isAgentRunning;
     final panel = _buildSuggestionPanel();
     final attachmentBar = _buildAttachmentBar();
     return SafeArea(
@@ -1245,15 +1254,6 @@ class _ConversationPageState extends State<ConversationPage> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                if (generating)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: IconButton.filledTonal(
-                      tooltip: '打断',
-                      onPressed: _stop,
-                      icon: const Icon(Icons.stop),
-                    ),
-                  ),
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
                   child: IconButton.filledTonal(
