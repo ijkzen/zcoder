@@ -67,6 +67,12 @@ lib/
 
 详见 `docs/adr/0001-sid-hash-terminal-auth.md` 与 `CONTEXT.md`。
 
+## 预览 / Preview
+
+![应用总览](docs/app-overview.png)
+
+> 上行：设备列表 → 工作区 → 会话列表 → 会话流 ｜ 下行：模型提供商 → 模型弹窗 → 待办面板 → 协议日志
+
 ## 贡献 / Contributing
 
 欢迎提交 issue 与 PR，请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)（开发环境、提交规范与 PR 流程）和 [CONTEXT.md](CONTEXT.md)（术语表）。参与即代表遵守 [行为准则](CODE_OF_CONDUCT.md)。
