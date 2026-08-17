@@ -5,8 +5,11 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/app_controller.dart';
 import 'src/services/notifications.dart';
+import 'src/services/update_checker.dart';
+import 'src/storage/app_database.dart';
 import 'src/ui/deep_link.dart';
 import 'src/ui/devices_page.dart';
+import 'src/ui/settings_page.dart';
 import 'src/ui/theme.dart';
 
 Future<void> main() async {
@@ -38,6 +41,46 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
     _deepLinkSub = widget.app.deepLinkStream.listen((raw) {
       unawaited(handleDeepLink(widget.app, raw));
     });
+    // Silent update check on startup: shows a SnackBar only if a newer
+    // version exists; failures are swallowed so the user is never bothered.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_silentCheckForUpdates());
+    });
+  }
+
+  Future<void> _silentCheckForUpdates() async {
+    try {
+      final channelLabel = await AppDatabase.instance.getSetting(
+        'update_channel',
+      );
+      final channel = UpdateChannel.fromLabel(channelLabel);
+      final checker = UpdateChecker(
+        owner: 'ijkzen',
+        repo: 'zcoder',
+        currentVersion: appVersion,
+      );
+      final info = await checker.checkForUpdate(channel: channel);
+      if (info != null && mounted) {
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('发现新版本 ${info.displayVersion}'),
+            action: SnackBarAction(
+              label: '查看',
+              onPressed: () {
+                appNavigatorKey.currentState?.push(
+                  MaterialPageRoute(
+                    builder: (_) => const SettingsPage(),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      // Silent: startup check failures should never interrupt the user.
+    }
   }
 
   @override
