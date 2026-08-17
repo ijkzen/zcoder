@@ -966,17 +966,18 @@ class _SessionsPageState extends State<SessionsPage> {
                                     width: 40,
                                     height: 40,
                                     child: Center(
-                                      child: Container(
-                                        // 运行中=蓝色圆点，已完成=绿色圆点（同尺寸）。
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: running
-                                              ? Colors.blue
-                                              : Colors.green,
-                                        ),
-                                      ),
+                                      child: () {
+                                        final color = _statusColor(s.displayStatus);
+                                        if (color == null) return const SizedBox.shrink();
+                                        return Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: color,
+                                          ),
+                                        );
+                                      }(),
                                     ),
                                   ),
                             title: Text(
@@ -1145,6 +1146,23 @@ class _SessionsPageState extends State<SessionsPage> {
         ),
       ),
     );
+  }
+
+  /// Returns the color for the session status dot.
+  /// [status] is [Workspace.displayStatus] (idle | running | completed | error).
+  Color? _statusColor(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green;
+      case 'running':
+        return Colors.blue;
+      case 'error':
+        return Colors.red;
+      case 'draft':
+        return Colors.yellow;
+      default:
+        return null; // No dot for idle and other statuses
+    }
   }
 }
 
