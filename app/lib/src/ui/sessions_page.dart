@@ -5,6 +5,7 @@ import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'conversation_page.dart';
 import 'model_config_sheet.dart';
+import 'pull_to_refresh.dart';
 
 /// Screen 3: sessions of the active workspace. Also the entry point for
 /// starting a new session (bottom input bar).
@@ -677,242 +678,251 @@ class _SessionsPageState extends State<SessionsPage> {
                 builder: (context, _) {
                   final sessions = _visibleSessions();
                   if (sessions.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              _tab == 2
-                                  ? Icons.archive_outlined
-                                  : Icons.forum_outlined,
-                              size: 56,
-                              color: scheme.outline,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _tab == 2
-                                  ? '没有已归档的会话'
-                                  : (_query.isNotEmpty
-                                        ? '没有匹配的会话'
-                                        : '这个工作区还没有会话'),
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            if (_tab != 2 && _query.isEmpty)
-                              Text(
-                                '在下方输入框直接开始一个新任务',
-                                style: TextStyle(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+                    return RefreshIndicator(
+                      onRefresh: widget.app.refreshSessions,
+                      child: RefreshableEmptyState(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _tab == 2
+                                    ? Icons.archive_outlined
+                                    : Icons.forum_outlined,
+                                size: 56,
+                                color: scheme.outline,
                               ),
-                          ],
+                              const SizedBox(height: 12),
+                              Text(
+                                _tab == 2
+                                    ? '没有已归档的会话'
+                                    : (_query.isNotEmpty
+                                          ? '没有匹配的会话'
+                                          : '这个工作区还没有会话'),
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              if (_tab != 2 && _query.isEmpty)
+                                Text(
+                                  '在下方输入框直接开始一个新任务',
+                                  style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     );
                   }
-                  return ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                    itemCount: sessions.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, i) {
-                      final s = sessions[i];
-                      final running = s.isRunning;
-                      final title =
-                          (s.taskTitle != null && s.taskTitle!.isNotEmpty)
-                          ? s.taskTitle!
-                          : '未命名会话';
-                      final id = s.taskId!;
-                      final selected = _selectedIds.contains(id);
-                      final card = Card(
-                        margin: EdgeInsets.zero,
-                        // Zero margin: the action buttons ride flush against the
-                        // card's right edge (spacing comes from the list).
-                        color: (_multiSelect && selected)
-                            ? scheme.surfaceContainerHighest
-                            : null,
-                        child: ListTile(
-                          leading: _multiSelect
-                              ? (running
-                                    // Running sessions can't be archived — keep
-                                    // the running marker instead of a checkbox.
-                                    ? Icon(
-                                        Icons.play_arrow,
-                                        color: scheme.outline,
-                                      )
-                                    : Icon(
-                                        selected
-                                            ? Icons.check_circle
-                                            : Icons.radio_button_unchecked,
-                                        color: selected
-                                            ? scheme.primary
-                                            : scheme.outline,
-                                      ))
-                              : SizedBox(
-                                  width: 40,
-                                  height: 40,
-                                  child: Center(
-                                    child: Container(
-                                      // 运行中=蓝色圆点，已完成=绿色圆点（同尺寸）。
-                                      width: 8,
-                                      height: 8,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: running
-                                            ? Colors.blue
-                                            : Colors.green,
+                  return RefreshIndicator(
+                    onRefresh: widget.app.refreshSessions,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: sessions.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, i) {
+                        final s = sessions[i];
+                        final running = s.isRunning;
+                        final title =
+                            (s.taskTitle != null && s.taskTitle!.isNotEmpty)
+                            ? s.taskTitle!
+                            : '未命名会话';
+                        final id = s.taskId!;
+                        final selected = _selectedIds.contains(id);
+                        final card = Card(
+                          margin: EdgeInsets.zero,
+                          // Zero margin: the action buttons ride flush against the
+                          // card's right edge (spacing comes from the list).
+                          color: (_multiSelect && selected)
+                              ? scheme.surfaceContainerHighest
+                              : null,
+                          child: ListTile(
+                            leading: _multiSelect
+                                ? (running
+                                      // Running sessions can't be archived — keep
+                                      // the running marker instead of a checkbox.
+                                      ? Icon(
+                                          Icons.play_arrow,
+                                          color: scheme.outline,
+                                        )
+                                      : Icon(
+                                          selected
+                                              ? Icons.check_circle
+                                              : Icons.radio_button_unchecked,
+                                          color: selected
+                                              ? scheme.primary
+                                              : scheme.outline,
+                                        ))
+                                : SizedBox(
+                                    width: 40,
+                                    height: 40,
+                                    child: Center(
+                                      child: Container(
+                                        // 运行中=蓝色圆点，已完成=绿色圆点（同尺寸）。
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: running
+                                              ? Colors.blue
+                                              : Colors.green,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                          title: Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            // Unread sessions render bold with a dot.
-                            style: (s.unreadAt != null && _tab != 2)
-                                ? const TextStyle(fontWeight: FontWeight.w700)
-                                : null,
-                          ),
-                          subtitle: Text(
-                            running ? '运行中' : '已完成',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          // Archived tab: restore button; otherwise the unread
-                          // dot (multi-select mode hides both).
-                          trailing: _multiSelect
-                              ? null
-                              : (_tab == 2
-                                    ? IconButton(
-                                        tooltip: '取消归档',
-                                        onPressed: () =>
-                                            _unarchiveSession(s, title),
-                                        icon: const Icon(
-                                          Icons.unarchive_outlined,
-                                        ),
-                                      )
-                                    : Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (s.unreadAt != null)
-                                            Padding(
-                                              padding: const EdgeInsets.only(
-                                                right: 8,
-                                              ),
-                                              child: Icon(
-                                                Icons.circle,
-                                                size: 8,
-                                                color: scheme.primary,
-                                              ),
-                                            ),
-                                          PopupMenuButton<String>(
-                                            tooltip: '更多操作',
-                                            onSelected: (value) {
-                                              switch (value) {
-                                                case 'pin':
-                                                  _togglePin(s);
-                                                  break;
-                                                case 'rename':
-                                                  _renameSession(s, title);
-                                                  break;
-                                                case 'archive':
-                                                  _archiveSession(s, title);
-                                                  break;
-                                              }
-                                            },
-                                            itemBuilder: (context) => [
-                                              PopupMenuItem(
-                                                value: 'pin',
-                                                child: ListTile(
-                                                  leading: Icon(
-                                                    s.pinned
-                                                        ? Icons
-                                                              .push_pin_outlined
-                                                        : Icons.push_pin,
-                                                    size: 20,
-                                                  ),
-                                                  title: Text(
-                                                    s.pinned ? '取消置顶' : '置顶',
-                                                  ),
-                                                  contentPadding:
-                                                      EdgeInsets.zero,
+                            title: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              // Unread sessions render bold with a dot.
+                              style: (s.unreadAt != null && _tab != 2)
+                                  ? const TextStyle(fontWeight: FontWeight.w700)
+                                  : null,
+                            ),
+                            subtitle: Text(
+                              running ? '运行中' : '已完成',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            // Archived tab: restore button; otherwise the unread
+                            // dot (multi-select mode hides both).
+                            trailing: _multiSelect
+                                ? null
+                                : (_tab == 2
+                                      ? IconButton(
+                                          tooltip: '取消归档',
+                                          onPressed: () =>
+                                              _unarchiveSession(s, title),
+                                          icon: const Icon(
+                                            Icons.unarchive_outlined,
+                                          ),
+                                        )
+                                      : Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (s.unreadAt != null)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  right: 8,
+                                                ),
+                                                child: Icon(
+                                                  Icons.circle,
+                                                  size: 8,
+                                                  color: scheme.primary,
                                                 ),
                                               ),
-                                              PopupMenuItem(
-                                                value: 'rename',
-                                                child: const ListTile(
-                                                  leading: Icon(
-                                                    Icons.edit_outlined,
-                                                    size: 20,
-                                                  ),
-                                                  title: Text('重命名'),
-                                                  contentPadding:
-                                                      EdgeInsets.zero,
-                                                ),
-                                              ),
-                                              // 运行中会话不可归档（TC-SES-101），
-                                              // 菜单不出现「归档」项。
-                                              if (!running)
+                                            PopupMenuButton<String>(
+                                              tooltip: '更多操作',
+                                              onSelected: (value) {
+                                                switch (value) {
+                                                  case 'pin':
+                                                    _togglePin(s);
+                                                    break;
+                                                  case 'rename':
+                                                    _renameSession(s, title);
+                                                    break;
+                                                  case 'archive':
+                                                    _archiveSession(s, title);
+                                                    break;
+                                                }
+                                              },
+                                              itemBuilder: (context) => [
                                                 PopupMenuItem(
-                                                  value: 'archive',
-                                                  child: const ListTile(
+                                                  value: 'pin',
+                                                  child: ListTile(
                                                     leading: Icon(
-                                                      Icons.archive_outlined,
+                                                      s.pinned
+                                                          ? Icons
+                                                                .push_pin_outlined
+                                                          : Icons.push_pin,
                                                       size: 20,
                                                     ),
-                                                    title: Text('归档'),
+                                                    title: Text(
+                                                      s.pinned ? '取消置顶' : '置顶',
+                                                    ),
                                                     contentPadding:
                                                         EdgeInsets.zero,
                                                   ),
                                                 ),
-                                            ],
-                                          ),
-                                        ],
-                                      )),
-                          onTap: _multiSelect
-                              ? () {
-                                  if (running) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('运行中的会话不能归档'),
+                                                PopupMenuItem(
+                                                  value: 'rename',
+                                                  child: const ListTile(
+                                                    leading: Icon(
+                                                      Icons.edit_outlined,
+                                                      size: 20,
+                                                    ),
+                                                    title: Text('重命名'),
+                                                    contentPadding:
+                                                        EdgeInsets.zero,
+                                                  ),
+                                                ),
+                                                // 运行中会话不可归档（TC-SES-101），
+                                                // 菜单不出现「归档」项。
+                                                if (!running)
+                                                  PopupMenuItem(
+                                                    value: 'archive',
+                                                    child: const ListTile(
+                                                      leading: Icon(
+                                                        Icons.archive_outlined,
+                                                        size: 20,
+                                                      ),
+                                                      title: Text('归档'),
+                                                      contentPadding:
+                                                          EdgeInsets.zero,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ],
+                                        )),
+                            onTap: _multiSelect
+                                ? () {
+                                    if (running) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('运行中的会话不能归档'),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    setState(() {
+                                      if (!_selectedIds.remove(id)) {
+                                        _selectedIds.add(id);
+                                      }
+                                    });
+                                  }
+                                : () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ConversationPage(
+                                          app: widget.app,
+                                          sessionId: id,
+                                          title: title,
+                                          archived: s.archived,
+                                        ),
                                       ),
                                     );
-                                    return;
-                                  }
-                                  setState(() {
-                                    if (!_selectedIds.remove(id)) {
-                                      _selectedIds.add(id);
-                                    }
-                                  });
-                                }
-                              : () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ConversationPage(
-                                        app: widget.app,
-                                        sessionId: id,
-                                        title: title,
-                                        archived: s.archived,
-                                      ),
-                                    ),
-                                  );
-                                },
-                          // Long-press enters multi-select with this item
-                          // checked (the standard bulk-action entry gesture).
-                          // The archived tab has no batch-archive entry, so the
-                          // gesture is disabled there too.
-                          onLongPress: _multiSelect || _tab == 2
-                              ? null
-                              : () => setState(() {
-                                  _multiSelect = true;
-                                  _selectedIds.add(id);
-                                }),
-                        ),
-                      );
-                      return card;
-                    },
+                                  },
+                            // Long-press enters multi-select with this item
+                            // checked (the standard bulk-action entry gesture).
+                            // The archived tab has no batch-archive entry, so the
+                            // gesture is disabled there too.
+                            onLongPress: _multiSelect || _tab == 2
+                                ? null
+                                : () => setState(() {
+                                    _multiSelect = true;
+                                    _selectedIds.add(id);
+                                  }),
+                          ),
+                        );
+                        return card;
+                      },
+                    ),
                   );
                 },
               ),
@@ -1000,4 +1010,3 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
     );
   }
 }
-
