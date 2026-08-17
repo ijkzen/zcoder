@@ -730,14 +730,15 @@ class _SessionsPageState extends State<SessionsPage> {
             ].whereType<String>().join(' · ');
     }
     final mode = _draftMode ?? _workspaceConfig?.mode;
-    final modeText = (mode == null || mode.isEmpty) ? '' : ' · $mode';
+    final modeText = (mode == null || mode.isEmpty) ? '' : mode;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              '$modelText$modeText',
+              modelText,
+              textAlign: TextAlign.left,
               style: Theme.of(
                 context,
               ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
@@ -745,29 +746,16 @@ class _SessionsPageState extends State<SessionsPage> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          // The draft is sticky (persisted); offer a one-tap way back to the
-          // workspace default.
-          if (hasDraft)
-            InkWell(
-              onTap: () async {
-                setState(() {
-                  _draftProvider = null;
-                  _draftModel = null;
-                  _draftThought = null;
-                });
-                try {
-                  await widget.app.clearWorkspaceModelPrefs(
-                    widget.workspace.workspaceKey,
-                  );
-                } catch (_) {
-                  // Persistence failing must not undo the in-memory clear.
-                }
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: Icon(Icons.close, size: 14, color: scheme.outline),
+          if (modeText.isNotEmpty) ...[
+            const SizedBox(width: 12),
+            Text(
+              modeText,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
               ),
+              maxLines: 1,
             ),
+          ],
         ],
       ),
     );

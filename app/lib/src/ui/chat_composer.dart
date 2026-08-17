@@ -241,6 +241,7 @@ class _ComposerInputBox extends StatelessWidget {
             child: IconButton(
               tooltip: '放大编辑',
               visualDensity: VisualDensity.compact,
+              style: IconButton.styleFrom(backgroundColor: Colors.transparent),
               onPressed: onExpand,
               icon: const Icon(Icons.open_in_full),
             ),
@@ -291,8 +292,9 @@ class _ComposerButtonRow extends StatelessWidget {
             icon: const Icon(Icons.image_outlined),
           ),
         const Spacer(),
-        IconButton.filled(
+        IconButton(
           tooltip: '发送',
+          style: IconButton.styleFrom(backgroundColor: Colors.transparent),
           onPressed: busy ? null : onSend,
           icon: const Icon(Icons.send),
         ),
