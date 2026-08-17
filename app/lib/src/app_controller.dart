@@ -596,9 +596,15 @@ class AppController extends ChangeNotifier {
   /// session-level readSession settings only expose what the current session
   /// resolves to (often a single provider, or a bare provider UUID for
   /// finished sessions).
-  Future<SessionModelConfig> fetchWorkspaceModelConfig() async {
+  ///
+  /// [refresh] bypasses the cache: there is no change event for the workspace
+  /// registry, so a provider deleted on the desktop (or the phone's provider
+  /// page) keeps showing in pickers until the registry is re-read.
+  Future<SessionModelConfig> fetchWorkspaceModelConfig({
+    bool refresh = false,
+  }) async {
     final cached = _workspaceModelConfigCache;
-    if (cached != null) return cached;
+    if (cached != null && !refresh) return cached;
     final service = _bridge?.sessionService;
     if (service == null) throw StateError('未连接');
     final result = await service.readWorkspaceState();
@@ -608,8 +614,17 @@ class AppController extends ChangeNotifier {
       '${settings is Map ? settings.keys.toList() : null} '
       'mode=${settings is Map ? settings['mode'] : null}',
     );
-    final config = SessionModelConfig.fromSettings(
+    var config = SessionModelConfig.fromSettings(
       settings is Map<String, Object?> ? settings : null,
+    );
+    config = await _pruneDeletedProviders(config);
+    zlog(
+      '[zremote] workspace registry source (refresh=$refresh): '
+      '${config.availableModels.length} models / '
+      '${config.availableModels.map((m) => m.provider).toSet().length} providers '
+      '[${config.availableModels.map((m) => m.provider).toSet().join(', ')}]; '
+      'current=${config.provider ?? '-'}/${config.model ?? '-'} '
+      'thought=${config.thoughtLevel ?? '-'}',
     );
     if (config.availableModels.isNotEmpty) {
       _workspaceModelConfigCache = config;
@@ -618,6 +633,53 @@ class AppController extends ChangeNotifier {
   }
 
   SessionModelConfig? _workspaceModelConfigCache;
+
+  /// Drops the cached workspace registry after phone-side provider CRUD so
+  /// the next fetch sees the desktop's current registry.
+  void invalidateWorkspaceModelConfig() => _workspaceModelConfigCache = null;
+
+  /// The desktop runtime's `settings.model.available` is not rebuilt when a
+  /// provider is deleted (only on workspace bootstrap), so it can list
+  /// providers that no longer exist in the registry — deleted providers then
+  /// linger in every model picker. Cross-check against the live registry
+  /// (`getAllCached`, which the host refreshes on every provider change) and
+  /// drop models whose provider is gone. Offline, or when the registry is
+  /// unavailable, the list passes through unchanged.
+  Future<SessionModelConfig> _pruneDeletedProviders(
+    SessionModelConfig config,
+  ) async {
+    if (config.availableModels.isEmpty) return config;
+    final service = modelProviderService;
+    if (service == null) return config;
+    try {
+      final providers = await service.getAllCached();
+      final liveIds = providers
+          .map((p) => p['id']?.toString())
+          .whereType<String>()
+          .toSet();
+      if (liveIds.isEmpty) return config;
+      final kept = config.availableModels
+          .where((m) => liveIds.contains(m.provider))
+          .toList();
+      if (kept.length == config.availableModels.length) return config;
+      zlog(
+        '[zremote] pruned ${config.availableModels.length - kept.length} '
+        'models from deleted providers '
+        '[${config.availableModels.map((m) => m.provider).toSet().difference(liveIds).join(', ')}]',
+      );
+      return SessionModelConfig(
+        provider: config.provider,
+        model: config.model,
+        thoughtLevel: config.thoughtLevel,
+        mode: config.mode,
+        availableModels: kept,
+        availableThoughtLevels: config.availableThoughtLevels,
+      );
+    } catch (e) {
+      zlog('[zremote] provider prune skipped: $e');
+      return config;
+    }
+  }
 
   // ---------- Workspace prep (slash commands) & skills ----------
 
@@ -684,12 +746,21 @@ class AppController extends ChangeNotifier {
 
   /// Builds the picker config for the open conversation: the workspace's full
   /// model list with the session's current provider/model/thought preselected.
+  /// Re-reads the registry on every open so providers deleted since the last
+  /// fetch don't linger in the sheet.
   /// Falls back to the session-only config when the workspace registry is
   /// unavailable (offline).
   Future<SessionModelConfig> conversationPickerConfig() async {
     final current = sessionModelConfig;
     try {
-      final ws = await fetchWorkspaceModelConfig();
+      final ws = await fetchWorkspaceModelConfig(refresh: true);
+      zlog(
+        '[zremote] picker config: '
+        '${ws.availableModels.isNotEmpty ? 'workspace' : 'SESSION-FALLBACK'} '
+        '${ws.availableModels.length} models '
+        '[${ws.availableModels.map((m) => m.provider).toSet().join(', ')}] '
+        'session=${current.provider ?? '-'}/${current.model ?? '-'}',
+      );
       if (ws.availableModels.isNotEmpty) {
         return SessionModelConfig(
           provider: current.provider,
@@ -700,8 +771,9 @@ class AppController extends ChangeNotifier {
           availableThoughtLevels: ws.availableThoughtLevels,
         );
       }
-    } catch (_) {
+    } catch (e) {
       // Offline — fall through to the session-only config.
+      zlog('[zremote] picker config: SESSION-FALLBACK (workspace fetch failed: $e)');
     }
     return current;
   }

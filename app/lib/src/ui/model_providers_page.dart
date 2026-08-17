@@ -5,6 +5,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
+import 'pull_to_refresh.dart';
 
 class ModelProvidersPage extends StatefulWidget {
   final AppController app;
@@ -16,8 +17,18 @@ class ModelProvidersPage extends StatefulWidget {
 
 class _ModelProvidersPageState extends State<ModelProvidersPage> {
   List<Map<String, Object?>> _providers = const [];
+
+  /// True when `getAll` returned preset-family providers that this page hides
+  /// (see [_isPresetProvider]); used to tell the two empty states apart.
+  bool _hasHiddenPresets = false;
   bool _loading = true;
   String? _error;
+
+  /// Preset-family providers (`builtin:*` — Z.ai/BigModel and their Coding
+  /// Plan variants) are managed on the desktop: login / OAuth / subscription
+  /// flows live there, and the desktop settings page refuses to delete them.
+  /// Its "custom" group is exactly `getAll()` minus these, so mirror that.
+  bool _isPresetProvider(String? id) => id?.startsWith('builtin:') == true;
 
   @override
   void initState() {
@@ -42,7 +53,11 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
       final providers = await service.getAll();
       if (mounted) {
         setState(() {
-          _providers = providers;
+          final custom = providers
+              .where((p) => !_isPresetProvider(p['id']?.toString()))
+              .toList();
+          _providers = custom;
+          _hasHiddenPresets = providers.length != custom.length;
           _loading = false;
         });
       }
@@ -61,6 +76,7 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
     if (service == null) return;
     try {
       await service.save({...provider, 'enabled': enabled});
+      widget.app.invalidateWorkspaceModelConfig();
       if (!enabled) {
         // Drafts referencing the disabled provider fall back to the workspace
         // default so the next created session can't pick a dead model.
@@ -155,6 +171,7 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
     if (service == null) return;
     try {
       await service.delete(provider['id']?.toString() ?? '');
+      widget.app.invalidateWorkspaceModelConfig();
       await _load();
       _toast('已删除');
     } catch (e) {
@@ -174,6 +191,7 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
     if (service == null) return;
     try {
       await service.save(added);
+      widget.app.invalidateWorkspaceModelConfig();
       await _load();
       _toast('已添加提供商');
     } catch (e) {
@@ -209,69 +227,108 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_error!),
-            const SizedBox(height: 12),
-            FilledButton.tonal(onPressed: _load, child: const Text('重试')),
-          ],
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: RefreshableEmptyState(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_error!),
+              const SizedBox(height: 12),
+              FilledButton.tonal(onPressed: _load, child: const Text('重试')),
+            ],
+          ),
         ),
       );
     }
     if (_providers.isEmpty) {
-      return const Center(child: Text('还没有配置模型提供商'));
-    }
-    return ListView.separated(
-      padding: const EdgeInsets.all(12),
-      itemCount: _providers.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, i) {
-        final provider = _providers[i];
-        final name = provider['name']?.toString() ?? '未命名';
-        final type = provider['type']?.toString();
-        final baseUrl = provider['baseUrl']?.toString();
-        final enabled = provider['enabled'] != false;
-        return Card(
-          margin: EdgeInsets.zero,
-          child: ListTile(
-            leading: CircleAvatar(
-              child: Text(name.isEmpty ? '?' : name.characters.first),
-            ),
-            title: Text(name),
-            subtitle: Text(
-              [
-                type,
-                baseUrl,
-              ].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Switch(value: enabled, onChanged: (v) => _toggle(provider, v)),
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'delete') _delete(provider);
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: ListTile(
-                        leading: Icon(Icons.delete_outline),
-                        title: Text('删除'),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: RefreshableEmptyState(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              _hasHiddenPresets
+                  ? '内置预设供应商（Z.ai、BigModel 等）由桌面端管理，这里只显示自定义提供商'
+                  : '还没有配置模型提供商',
+              textAlign: TextAlign.center,
             ),
           ),
-        );
-      },
+        ),
+      );
+    }
+    return Column(
+      children: [
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: _providers.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (context, i) {
+                final provider = _providers[i];
+                final name = provider['name']?.toString() ?? '未命名';
+                final type = provider['type']?.toString();
+                final baseUrl = provider['baseUrl']?.toString();
+                final enabled = provider['enabled'] != false;
+                return Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: Text(name.isEmpty ? '?' : name.characters.first),
+                    ),
+                    title: Text(name),
+                    subtitle: Text(
+                      [type, baseUrl]
+                          .whereType<String>()
+                          .where((s) => s.isNotEmpty)
+                          .join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Switch(
+                          value: enabled,
+                          onChanged: (v) => _toggle(provider, v),
+                        ),
+                        PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'delete') _delete(provider);
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: ListTile(
+                                leading: Icon(Icons.delete_outline),
+                                title: Text('删除'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (_hasHiddenPresets)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+            child: Text(
+              '内置预设（Z.ai、BigModel 等）由桌面端管理，不在此列出',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

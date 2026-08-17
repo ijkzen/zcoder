@@ -145,14 +145,26 @@ class ModelProviderService {
     ];
   }
 
+  /// The host's cached registry snapshot — unlike [getAll] it skips the OAuth
+  /// preset sync, so it is cheap to call from pickers. Still reflects
+  /// provider deletions (the host refreshes this snapshot on every change).
+  Future<List<Map<String, Object?>>> getAllCached() async {
+    final raw = await _channel.call('getAllCached');
+    if (raw is! List) return const [];
+    return [
+      for (final item in raw.whereType<Map>()) item.cast<String, Object?>(),
+    ];
+  }
+
   Future<Object?> save(Map<String, Object?> provider) => _channel.call('save', {
     ...provider,
     'updatedAt': DateTime.now().millisecondsSinceEpoch,
   });
 
-  Future<Object?> delete(String id) => _channel.call('delete', [
-    {'id': id},
-  ]);
+  // The promise path spreads the args array into the method call, so a bare
+  // id arrives as `delete(id)` on the host. Wrapping it as `[{'id': id}]`
+  // made the host filter `Se.id !== [{id}]` and silently no-op.
+  Future<Object?> delete(String id) => _channel.call('delete', id);
 }
 
 /// `skills` channel — enabled skills of the workspace; triggered in the

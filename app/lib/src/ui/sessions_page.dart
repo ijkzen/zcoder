@@ -90,21 +90,19 @@ class _SessionsPageState extends State<SessionsPage> {
 
   Future<void> _pickModelConfig() async {
     var config = _workspaceConfig;
-    if (config == null && !_configLoading) {
+    if (!_configLoading) {
       setState(() => _configLoading = true);
       try {
-        config = await widget.app.fetchWorkspaceModelConfig();
+        // Re-read the registry on every open so providers deleted since the
+        // page loaded (desktop settings or this page) don't linger in the
+        // picker; when offline, keep the page-load snapshot.
+        config = await widget.app.fetchWorkspaceModelConfig(refresh: true);
         _workspaceConfig = config;
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('读取模型配置失败：$e')));
-        }
+      } catch (_) {
+        // Offline — _workspaceConfig already holds the last snapshot.
+      } finally {
         if (mounted) setState(() => _configLoading = false);
-        return;
       }
-      if (mounted) setState(() => _configLoading = false);
     }
     if (!mounted || config == null) return;
     if (config.availableModels.isEmpty &&
