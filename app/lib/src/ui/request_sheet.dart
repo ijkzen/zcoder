@@ -491,11 +491,19 @@ class _RequestSheetState extends State<RequestSheet> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                q.multiSelect ? '可多选' : '单选',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.end,
+                children: [
+                  if (page.request.isFromSubagent) const _SubagentBadge(),
+                  Text(
+                    q.multiSelect ? '可多选' : '单选',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -548,10 +556,17 @@ class _RequestSheetState extends State<RequestSheet> {
                   ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
                 ),
               ),
-              if (request.riskLevel.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                _RiskChip(level: request.riskLevel),
-              ],
+              const SizedBox(width: 8),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.end,
+                children: [
+                  if (request.isFromSubagent) const _SubagentBadge(),
+                  if (request.riskLevel.isNotEmpty)
+                    _RiskChip(level: request.riskLevel),
+                ],
+              ),
             ],
           ),
           if (request.toolName.isNotEmpty)
@@ -625,11 +640,22 @@ class _RequestSheetState extends State<RequestSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            prompt,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  prompt,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: scheme.onSurface),
+                ),
+              ),
+              if (request.isFromSubagent) ...[
+                const SizedBox(width: 8),
+                const _SubagentBadge(),
+              ],
+            ],
           ),
           if (simpleOptions.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -772,6 +798,38 @@ const _maxDetailLength = 4000;
 String _trimDetail(String s) => s.length > _maxDetailLength
     ? '${s.substring(0, _maxDetailLength)}\n…（已截断）'
     : s;
+
+/// Marks a permission request raised by a subagent (child session), so the
+/// user knows the tool call is not the main agent's.
+class _SubagentBadge extends StatelessWidget {
+  const _SubagentBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.smart_toy_outlined, size: 12, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 4),
+          Text(
+            '来自子智能体',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSecondaryContainer,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _RiskChip extends StatelessWidget {
   final String level; // low | medium | high | critical

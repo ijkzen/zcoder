@@ -341,22 +341,28 @@ class _ConversationPageState extends State<ConversationPage> {
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
-                const PopupMenuItem(
-                  value: 'pauseGoal',
-                  child: ListTile(
-                    leading: Icon(Icons.pause_circle_outline),
-                    title: Text('暂停目标'),
-                    contentPadding: EdgeInsets.zero,
+                // 目标命令按当前目标状态决定出现与否（与桌面端一致，依据
+                // 会话快照 availability.pauseGoal/resumeGoal.allowed）：
+                // 有目标在跑 → 仅「暂停目标」；目标已暂停 → 仅「恢复目标」；
+                // 无目标（或 availability 未到达）→ 两者都不出现。
+                if (_state?.canPauseGoal ?? false)
+                  const PopupMenuItem(
+                    value: 'pauseGoal',
+                    child: ListTile(
+                      leading: Icon(Icons.pause_circle_outline),
+                      title: Text('暂停目标'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                const PopupMenuItem(
-                  value: 'resumeGoal',
-                  child: ListTile(
-                    leading: Icon(Icons.play_circle_outline),
-                    title: Text('恢复目标'),
-                    contentPadding: EdgeInsets.zero,
+                if (_state?.canResumeGoal ?? false)
+                  const PopupMenuItem(
+                    value: 'resumeGoal',
+                    child: ListTile(
+                      leading: Icon(Icons.play_circle_outline),
+                      title: Text('恢复目标'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
                 const PopupMenuItem(
                   value: 'plans',
                   child: ListTile(

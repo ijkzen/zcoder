@@ -975,6 +975,11 @@ class PendingRequest {
   final Map<String, Object?> input;
   final List<PendingRequestOption> options;
   final int? requestedAt;
+  /// Who requested the approval. `{kind: "subagent", agentId, agentType,
+  /// childSessionId, parentSessionId, parentToolCallId?, …}` when a subagent
+  /// (child session) raised the request — the UI marks those entries with a
+  /// badge. Absent for main-agent requests.
+  final Map<String, Object?>? origin;
 
   const PendingRequest({
     required this.requestId,
@@ -985,6 +990,7 @@ class PendingRequest {
     this.input = const {},
     this.options = const [],
     this.requestedAt,
+    this.origin,
   });
 
   factory PendingRequest.fromJson(Map<String, Object?> json) => PendingRequest(
@@ -1003,7 +1009,14 @@ class PendingRequest {
               .toList()
         : const [],
     requestedAt: json['requestedAt'] as int?,
+    origin: json['origin'] is Map<String, Object?>
+        ? json['origin'] as Map<String, Object?>
+        : null,
   );
+
+  /// True when the request was raised by a subagent (child session) rather
+  /// than the main agent — the sheet shows a badge on those pages.
+  bool get isFromSubagent => origin?['kind'] == 'subagent';
 
   /// AskUserQuestion requests carry `input.questions`.
   List<InteractionQuestion> get questions => input['questions'] is List

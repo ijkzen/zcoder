@@ -189,7 +189,7 @@
 | TC-CONV-022 | 会话菜单 | 「压缩会话」→ 确认（红色按钮，文案「不可撤销」） | SnackBar「已发送压缩请求」；压缩完成后出现 TimelineMarker 行 |
 | TC-CONV-023 | AppBar | 点 Token 图标 | Token 使用详情 sheet：上下文填充条、来源构成条、平均缓存命中率（取会话快照 `usage.contextWindow.cache.hitRate`，与桌面端聊天头部显示一致；无数据时显示 —，**不用** getTaskTokenUsage 累计 cacheRead/input 兜底）、累计输入/输出/请求次数 |
 | TC-CONV-024 | 会话详情页 | 系统返回键 / 返回按钮 | 关闭会话（停止轮询/退订）返回会话列表 |
-| TC-CONV-025 | 会话菜单 | 「暂停目标」/「恢复目标」 | 目标暂停后 agent 停止推进；恢复后继续；状态在阶段小字体现 |
+| TC-CONV-025 | 会话菜单 | 观察「暂停目标」/「恢复目标」是否出现 | 菜单项按目标状态**条件显示**（依据会话快照 `availability.pauseGoal/resumeGoal.allowed`，与桌面端一致）：有目标在跑 → 仅出现「暂停目标」；目标已暂停 → 仅出现「恢复目标」；无目标（或 availability 未到达）→ 两者都不出现。暂停后 agent 停止推进；恢复后继续；状态在阶段小字体现 |
 | TC-CONV-026 | 会话页内断线后重连成功 | 观察页面 | 自动恢复：重订阅 + 轮询续传，对话流与状态自洽，无需退出重进 |
 | TC-CONV-027 | 已在会话 A 详情页 | 点击会话 A 的通知深链 | no-op：不重复 push，页面保持 |
 | TC-CONV-028 | 有待办且滚动离开底部 | 观察右下 | Todo FAB 与「回到底部」FAB 垂直堆叠不重叠 |
@@ -218,7 +218,7 @@
 
 | ID | 前置条件 | 操作 | 预期结果 |
 |---|---|---|---|
-| TC-REQ-001 | 有 N 条待审批 | 打开 sheet | 标题「需要批准」；每条审批一页：prompt、工具名、风险等级 chip（低/中/高/严重 → 蓝/ tertiary/橙/红）、**工具动作详情（族感知，与桌面 renderer 对齐）**、选项单选（允许一次/始终允许/拒绝/自定义）。族感知详情规则：① 执行类（Bash/execute…）= `command` 原文（标签「命令」）；② 文件改动类（Edit/Write/patch…）= `file_path`（标签「文件」）+ 行数统计（Edit 有 `old_string`/`new_string` 时显示「−N 行 +M 行」；Write 等只有 `content` 时显示「N 行」）；③ 读取类（Read/view…）= `file_path`（标签「文件」）；④ 搜索类（Grep/Glob/WebFetch/WebSearch…）= `pattern`/`query`/`url`（标签「搜索」）；⑤ 未知工具 / `mcp__*` = input 美化 JSON（标签「参数」）；⑥ 无 input 则不显示详情 |
+| TC-REQ-001 | 有 N 条待审批 | 打开 sheet | 标题「需要批准」；每条审批一页：prompt、工具名、风险等级 chip（低/中/高/严重 → 蓝/ tertiary/橙/红）、**工具动作详情（族感知，与桌面 renderer 对齐）**、选项单选（允许一次/始终允许/拒绝/自定义）。族感知详情规则：① 执行类（Bash/execute…）= `command` 原文（标签「命令」）；② 文件改动类（Edit/Write/patch…）= `file_path`（标签「文件」）+ 行数统计（Edit 有 `old_string`/`new_string` 时显示「−N 行 +M 行」；Write 等只有 `content` 时显示「N 行」）；③ 读取类（Read/view…）= `file_path`（标签「文件」）；④ 搜索类（Grep/Glob/WebFetch/WebSearch…）= `pattern`/`query`/`url`（标签「搜索」）；⑤ 未知工具 / `mcp__*` = input 美化 JSON（标签「参数」）；⑥ 无 input 则不显示详情。**请求来自子智能体（`origin.kind == "subagent"`，审批/提问/自由文本各页型通用）时页面顶部右侧显示「来自子智能体」徽章（secondaryContainer 底、`Icons.smart_toy_outlined` 图标），审批页与风险 chip 同行并列** |
 | TC-REQ-002 | 有待提问（AskUserQuestion） | 打开 sheet | 标题「需要你的回答」；每问一页：问题正文、「可多选/单选」标注、选项行（多选=复选框，单选=radio）、「其他回答」自定义输入框 |
 | TC-REQ-003 | 混合审批+提问 | 打开 sheet | 标题「需要处理」；水平分页，页码指示点（当前页加宽） |
 | TC-REQ-004 | 单选问题页 | 点选某选项 | 选中高亮加粗并**自动跳到下一页** |

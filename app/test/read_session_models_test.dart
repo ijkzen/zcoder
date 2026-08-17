@@ -70,6 +70,45 @@ void main() {
       expect(req.options, hasLength(3));
       expect(req.options[1].kind, 'allow_always');
     });
+
+    test('parses a subagent origin as isFromSubagent', () {
+      final req = PendingRequest.fromJson({
+        'requestId': 'perm_subagent',
+        'toolName': 'Bash',
+        'reason': '子智能体请求执行 bash',
+        'input': {'command': 'ls'},
+        'options': [
+          {'optionId': 'allow_once', 'kind': 'allow_once', 'name': 'Allow once'},
+          {'optionId': 'deny', 'kind': 'deny', 'name': 'Deny'},
+        ],
+        'origin': {
+          'kind': 'subagent',
+          'agentId': 'agent_explore',
+          'agentType': 'explore',
+          'childSessionId': 'sess_child',
+          'parentSessionId': 'sess_parent',
+          'parentToolCallId': 'tool_task',
+        },
+      });
+
+      expect(req.isFromSubagent, isTrue);
+      expect(req.origin?['childSessionId'], 'sess_child');
+      expect(req.isElicitation, isFalse);
+    });
+
+    test('missing origin stays a main-agent request', () {
+      final req = PendingRequest.fromJson({
+        'requestId': 'perm_main',
+        'toolName': 'Bash',
+        'reason': 'Bash requires approval',
+        'options': [
+          {'optionId': 'allow_once', 'kind': 'allow_once', 'name': 'Allow once'},
+        ],
+      });
+
+      expect(req.origin, isNull);
+      expect(req.isFromSubagent, isFalse);
+    });
   });
 
   group('ContextUsage', () {

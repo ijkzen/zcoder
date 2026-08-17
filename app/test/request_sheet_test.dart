@@ -9,6 +9,7 @@ PendingRequest permission({
   String reason = '允许执行 bash 命令？',
   String riskLevel = 'medium',
   Map<String, Object?> input = const {},
+  Map<String, Object?>? origin,
   List<PendingRequestOption> options = const [
     PendingRequestOption(optionId: 'allow_once', kind: 'allow_once', name: '允许一次'),
     PendingRequestOption(optionId: 'allow_always', kind: 'allow_always', name: '始终允许'),
@@ -24,10 +25,12 @@ PendingRequest permission({
       input: input,
       options: options,
       requestedAt: 1,
+      origin: origin,
     );
 
 PendingRequest question({
   String requestId = 'perm_2',
+  Map<String, Object?>? origin,
   List<Map<String, Object?>>? questions,
 }) =>
     PendingRequest(
@@ -48,14 +51,20 @@ PendingRequest question({
             ],
       },
       requestedAt: 2,
+      origin: origin,
     );
 
-PendingRequest freeText({String requestId = 'perm_3'}) => PendingRequest(
+PendingRequest freeText({
+  String requestId = 'perm_3',
+  Map<String, Object?>? origin,
+}) =>
+    PendingRequest(
       requestId: requestId,
       toolName: 'AskUserQuestion',
       reason: '请输入内容',
       input: {'freeText': true, 'prompt': '描述一下你的想法'},
       requestedAt: 3,
+      origin: origin,
     );
 
 void main() {
@@ -273,6 +282,77 @@ void main() {
       expect(find.text('参数'), findsNothing);
       expect(find.text('文件'), findsNothing);
       expect(find.text('改动'), findsNothing);
+    });
+
+    testWidgets('subagent permission shows the 来自子智能体 badge',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          origin: {
+            'kind': 'subagent',
+            'agentId': 'agent_explore',
+            'agentType': 'explore',
+            'childSessionId': 'sess_child',
+            'parentSessionId': 'sess_parent',
+          },
+        ),
+      ]);
+
+      expect(find.text('来自子智能体'), findsOneWidget);
+      expect(find.byIcon(Icons.smart_toy_outlined), findsOneWidget);
+    });
+
+    testWidgets('main-agent permission has no subagent badge', (tester) async {
+      await pumpSheet(tester, [permission()]);
+
+      expect(find.text('来自子智能体'), findsNothing);
+      expect(find.byIcon(Icons.smart_toy_outlined), findsNothing);
+    });
+
+    testWidgets('subagent question shows the 来自子智能体 badge',
+        (tester) async {
+      await pumpSheet(tester, [
+        question(
+          origin: {
+            'kind': 'subagent',
+            'agentId': 'agent_explore',
+            'agentType': 'explore',
+            'childSessionId': 'sess_child',
+            'parentSessionId': 'sess_parent',
+          },
+        ),
+      ]);
+
+      expect(find.text('来自子智能体'), findsOneWidget);
+      expect(find.text('可多选'), findsNothing);
+      expect(find.text('单选'), findsOneWidget);
+    });
+
+    testWidgets('main-agent question has no subagent badge', (tester) async {
+      await pumpSheet(tester, [question()]);
+      expect(find.text('来自子智能体'), findsNothing);
+    });
+
+    testWidgets('subagent freeText shows the 来自子智能体 badge',
+        (tester) async {
+      await pumpSheet(tester, [
+        freeText(
+          origin: {
+            'kind': 'subagent',
+            'agentId': 'agent_explore',
+            'childSessionId': 'sess_child',
+            'parentSessionId': 'sess_parent',
+          },
+        ),
+      ]);
+
+      expect(find.text('来自子智能体'), findsOneWidget);
+      expect(find.text('描述一下你的想法'), findsOneWidget);
+    });
+
+    testWidgets('main-agent freeText has no subagent badge', (tester) async {
+      await pumpSheet(tester, [freeText()]);
+      expect(find.text('来自子智能体'), findsNothing);
     });
 
     testWidgets('cancel on a permission picks the deny option', (tester) async {

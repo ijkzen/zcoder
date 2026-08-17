@@ -185,4 +185,71 @@ void main() {
       expect(s.usage, isNull);
     });
   });
+
+  group('goal menu availability (pause/resume from snapshot availability)', () {
+    test('defaults to neither allowed before any snapshot', () {
+      final s = state();
+      expect(s.canPauseGoal, isFalse);
+      expect(s.canResumeGoal, isFalse);
+    });
+
+    test('availability via applySnapshot: running goal → pause only', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+        'availability': {
+          'fork': {'allowed': true},
+          'pauseGoal': {'allowed': true},
+          'resumeGoal': {'allowed': false, 'reasonCode': 'no_paused_goal'},
+        },
+      }));
+      expect(s.canPauseGoal, isTrue);
+      expect(s.canResumeGoal, isFalse);
+    });
+
+    test('availability via state.updated patch: paused goal → resume only', () {
+      final s = state();
+      s.applyDelta({
+        'op': 'state.updated',
+        'patch': {
+          'availability': {
+            'pauseGoal': {'allowed': false, 'reasonCode': 'no_active_goal'},
+            'resumeGoal': {'allowed': true},
+          },
+        },
+      });
+      expect(s.canPauseGoal, isFalse);
+      expect(s.canResumeGoal, isTrue);
+    });
+
+    test('no goal → both allowed=false → neither shown', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+        'availability': {
+          'pauseGoal': {'allowed': false, 'reasonCode': 'no_goal'},
+          'resumeGoal': {'allowed': false, 'reasonCode': 'no_goal'},
+        },
+      }));
+      expect(s.canPauseGoal, isFalse);
+      expect(s.canResumeGoal, isFalse);
+    });
+
+    test('missing entry (availability arrived without the command) → false', () {
+      final s = state();
+      s.availability = {
+        'compact': {'allowed': true},
+      };
+      expect(s.canPauseGoal, isFalse);
+      expect(s.canResumeGoal, isFalse);
+    });
+  });
 }

@@ -91,6 +91,21 @@ class ConversationState {
   bool get isAgentRunning =>
       sessionStatus == 'running' || (canStopOrNull ?? false);
 
+  /// Whether the pause/resume-goal commands are currently permitted, from the
+  /// snapshot's `availability` (`{command: {allowed, reasonCode?}}`) — the
+  /// same signal the desktop chat header gates its pause/resume buttons on
+  /// (renderer reads `availability.pauseGoal/resumeGoal.allowed`). A goal in
+  /// flight ⇒ only pauseGoal is allowed; a paused goal ⇒ only resumeGoal; no
+  /// goal ⇒ neither. Unknown (availability not yet arrived) ⇒ not allowed.
+  bool get canPauseGoal => _availabilityAllowed('pauseGoal');
+  bool get canResumeGoal => _availabilityAllowed('resumeGoal');
+
+  bool _availabilityAllowed(String command) {
+    final entry = availability?[command];
+    if (entry is Map<String, Object?>) return entry['allowed'] == true;
+    return false;
+  }
+
   // ---------- Held queue ----------
 
   /// Queued message items, in queue order (oldest first). Each item is the
@@ -554,6 +569,8 @@ class ConversationController {
       // frames) is broken (E2E-verified 2026-08-16).
       final control = result['control'];
       if (control is Map<String, Object?>) state.control = control;
+      final availability = result['availability'];
+      if (availability is Map<String, Object?>) state.availability = availability;
       final meta = result['meta'];
       if (meta is Map<String, Object?>) state.meta = meta;
       // Some host builds also inline the held queue here; when absent the
