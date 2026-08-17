@@ -13,6 +13,7 @@ import '../session/conversation_controller.dart';
 import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'request_sheet.dart';
+import 'command_suggestion_panel.dart';
 import 'model_config_sheet.dart';
 import 'markdown_skill_badge.dart';
 import 'mono_text.dart';
@@ -897,134 +898,7 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Input bar ----------
 
-  // ---------- Slash command / skills suggestion panel ----------
-
   final _inputFocusNode = FocusNode();
-  List<SlashCommand>? _slashCommands;
-  List<SkillEntry>? _skills;
-  bool _prepLoading = false;
-  String? _activeSuggestionPrefix; // the '/' or '$' token currently typed
-
-  /// The last whitespace-delimited token of the composer text.
-  String _currentToken(String text) {
-    final lastSpace = text.lastIndexOf(RegExp(r'\s'));
-    return lastSpace == -1 ? text : text.substring(lastSpace + 1);
-  }
-
-  void _onInputChanged(String text) {
-    final token = _currentToken(text);
-    if (token.startsWith('/')) {
-      _activeSuggestionPrefix = token;
-      _loadPrepIfNeeded();
-    } else if (token.startsWith(r'$')) {
-      _activeSuggestionPrefix = token;
-      _loadSkillsIfNeeded();
-    } else {
-      _activeSuggestionPrefix = null;
-    }
-    setState(() {});
-  }
-
-  Future<void> _loadPrepIfNeeded() async {
-    if (_slashCommands != null || _prepLoading) return;
-    _prepLoading = true;
-    final prep = await widget.app.fetchWorkspacePrep();
-    _slashCommands = prep?.slashCommands ?? const [];
-    _prepLoading = false;
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _loadSkillsIfNeeded() async {
-    if (_skills != null || _prepLoading) return;
-    _prepLoading = true;
-    _skills = await widget.app.fetchSkills();
-    _prepLoading = false;
-    if (mounted) setState(() {});
-  }
-
-  void _applySuggestion(String replacement) {
-    final text = _inputController.text;
-    final token = _currentToken(text);
-    final prefixEnd = text.length - token.length;
-    _inputController.text = '${text.substring(0, prefixEnd)}$replacement ';
-    _inputController.selection = TextSelection.collapsed(
-      offset: _inputController.text.length,
-    );
-    _activeSuggestionPrefix = null;
-    setState(() {});
-    _inputFocusNode.requestFocus();
-  }
-
-  Widget? _buildSuggestionPanel() {
-    final prefix = _activeSuggestionPrefix;
-    if (prefix == null) return null;
-    final items = <Widget>[];
-    if (prefix.startsWith('/')) {
-      final query = prefix.substring(1);
-      for (final cmd in _slashCommands ?? const <SlashCommand>[]) {
-        if (!cmd.name.startsWith(query)) continue;
-        items.add(
-          ListTile(
-            dense: true,
-            leading: const Icon(Icons.sell_outlined, size: 20),
-            title: Text('/${cmd.name}'),
-            subtitle: cmd.description.isEmpty
-                ? null
-                : Text(
-                    cmd.description,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-            onTap: () => _applySuggestion('/${cmd.name}'),
-          ),
-        );
-      }
-    } else if (prefix.startsWith(r'$')) {
-      final query = prefix.substring(1);
-      for (final skill in _skills ?? const <SkillEntry>[]) {
-        if (!skill.name.startsWith(query)) continue;
-        items.add(
-          ListTile(
-            dense: true,
-            leading: const Icon(Icons.auto_awesome, size: 20),
-            title: Text('\$${skill.name}'),
-            subtitle: skill.description == null
-                ? null
-                : Text(
-                    skill.description!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-            onTap: () => _applySuggestion('\$${skill.name}'),
-          ),
-        );
-      }
-    }
-    if (items.isEmpty) {
-      if (_prepLoading) {
-        return const Padding(
-          padding: EdgeInsets.all(12),
-          child: Center(
-            child: SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        );
-      }
-      return null;
-    }
-    return Material(
-      elevation: 3,
-      borderRadius: BorderRadius.circular(12),
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 260),
-        child: ListView(shrinkWrap: true, children: items),
-      ),
-    );
-  }
 
   // ---------- Attachments ----------
 
@@ -1243,7 +1117,6 @@ class _ConversationPageState extends State<ConversationPage> {
         ),
       );
     }
-    final panel = _buildSuggestionPanel();
     final attachmentBar = _buildAttachmentBar();
     return SafeArea(
       child: Padding(
@@ -1251,7 +1124,11 @@ class _ConversationPageState extends State<ConversationPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (panel != null) ...[panel, const SizedBox(height: 6)],
+            CommandSuggestionPanel(
+              app: widget.app,
+              controller: _inputController,
+              focusNode: _inputFocusNode,
+            ),
             if (attachmentBar != null) ...[
               attachmentBar,
               const SizedBox(height: 6),
@@ -1274,7 +1151,6 @@ class _ConversationPageState extends State<ConversationPage> {
                     minLines: 1,
                     maxLines: 6,
                     textInputAction: TextInputAction.send,
-                    onChanged: _onInputChanged,
                     onSubmitted: (_) {
                       // Sending mid-upload would detach the message from its
                       // attachments — wait for the progress bar to finish.

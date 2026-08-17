@@ -4,6 +4,7 @@ import '../app_controller.dart';
 import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'conversation_page.dart';
+import 'command_suggestion_panel.dart';
 import 'model_config_sheet.dart';
 import 'pull_to_refresh.dart';
 
@@ -20,6 +21,7 @@ class SessionsPage extends StatefulWidget {
 
 class _SessionsPageState extends State<SessionsPage> {
   final _inputController = TextEditingController();
+  final _inputFocusNode = FocusNode();
   bool _sending = false;
 
   /// Task-list view: 0 = all, 1 = pinned, 2 = archived.
@@ -56,6 +58,7 @@ class _SessionsPageState extends State<SessionsPage> {
   @override
   void dispose() {
     _inputController.dispose();
+    _inputFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -931,30 +934,41 @@ class _SessionsPageState extends State<SessionsPage> {
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _inputController,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _createSession(),
-                        decoration: const InputDecoration(
-                          hintText: '给 agent 下达新任务…',
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
+                    CommandSuggestionPanel(
+                      app: widget.app,
+                      controller: _inputController,
+                      focusNode: _inputFocusNode,
+                    ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _inputController,
+                            focusNode: _inputFocusNode,
+                            minLines: 1,
+                            maxLines: 4,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => _createSession(),
+                            decoration: const InputDecoration(
+                              hintText: '给 agent 下达新任务…',
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton.filled(
-                      onPressed: _sending ? null : _createSession,
-                      icon: const Icon(Icons.send),
+                        const SizedBox(width: 8),
+                        IconButton.filled(
+                          onPressed: _sending ? null : _createSession,
+                          icon: const Icon(Icons.send),
+                        ),
+                      ],
                     ),
                   ],
                 ),
