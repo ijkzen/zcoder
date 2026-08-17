@@ -13,7 +13,7 @@ import '../services/update_checker.dart';
 import '../storage/app_database.dart';
 
 /// App version from pubspec — kept in sync manually with pubspec.yaml.
-const appVersion = '0.4.1';
+const appVersion = '0.4.4';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -27,7 +27,6 @@ class _SettingsPageState extends State<SettingsPage> {
   UpdateMirror _mirror = UpdateMirror.official;
   bool _loading = false;
   bool _checking = false;
-  UpdateInfo? _updateInfo;
   String? _checkError;
   String? _noUpdateMsg;
 
@@ -64,7 +63,6 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _checkForUpdate() async {
     setState(() {
       _checking = true;
-      _updateInfo = null;
       _checkError = null;
       _noUpdateMsg = null;
     });
@@ -79,12 +77,19 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         setState(() {
           _checking = false;
-          if (info != null) {
-            _updateInfo = info;
-          } else {
+          if (info == null) {
             _noUpdateMsg = '已是最新版本';
           }
         });
+        if (info != null) {
+          final shouldUpdate = await showDialog<bool>(
+            context: context,
+            builder: (_) => _UpdateAvailableDialog(info: info),
+          );
+          if (shouldUpdate == true && mounted) {
+            _showDownloadDialog(info);
+          }
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -198,7 +203,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(color: scheme.onSurfaceVariant),
                 ),
               ),
-            if (_updateInfo != null) _buildUpdateCard(_updateInfo!),
             const Divider(height: 32),
           ],
         ],
@@ -206,76 +210,84 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildUpdateCard(UpdateInfo info) {
+}
+
+String _formatDate(DateTime dt) =>
+    '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+
+/// Dialog showing update release notes with "取消" and "更新" buttons.
+/// Returns true when the user taps "更新"; false (or null via barrier
+/// dismiss) when they cancel — the caller uses this to decide whether to
+/// proceed with the download/install flow.
+class _UpdateAvailableDialog extends StatelessWidget {
+  final UpdateInfo info;
+
+  const _UpdateAvailableDialog({required this.info});
+
+  @override
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.system_update, color: scheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('发现新版本 ${info.displayVersion}'),
+          ),
+          if (info.isPrerelease)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: scheme.tertiaryContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '预发布',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onTertiaryContainer,
+                ),
+              ),
+            ),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.download_for_offline, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '发现新版本 ${info.displayVersion}',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                if (info.isPrerelease)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: scheme.tertiaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '预发布',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onTertiaryContainer,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
             Text(
               '发布时间: ${_formatDate(info.publishedAt)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
             if (info.releaseNotes != null && info.releaseNotes!.isNotEmpty)
-              SizedBox(
-                height: 200,
-                child: MarkdownBody(
-                  data: info.releaseNotes!,
-                  selectable: true,
+              Flexible(
+                child: SingleChildScrollView(
+                  child: MarkdownBody(
+                    data: info.releaseNotes!,
+                    selectable: true,
+                  ),
                 ),
               ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => _showDownloadDialog(info),
-                icon: const Icon(Icons.download),
-                label: const Text('下载并安装'),
-              ),
-            ),
           ],
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: () => Navigator.of(context).pop(true),
+          icon: const Icon(Icons.download),
+          label: const Text('更新'),
+        ),
+      ],
     );
   }
-
-  String _formatDate(DateTime dt) =>
-      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
 }
 
 class _SectionHeader extends StatelessWidget {
