@@ -24,5 +24,8 @@ screen*.png
 s*.png
 .analysis/
 
+# CodeGraph index (local to each machine)
+.codegraph/
+
 # ZCode local state
 .zcode/
