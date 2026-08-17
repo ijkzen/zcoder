@@ -13,6 +13,7 @@ import 'protocol/core/random_ids.dart' as ids;
 import 'bridge/bridge_manager.dart';
 import 'protocol/relay/relay_client.dart';
 import 'protocol/relay/relay_frame.dart';
+import 'services/notifications.dart';
 import 'protocol/services/services.dart';
 import 'protocol/zlog.dart';
 import 'session/conversation_controller.dart';
@@ -122,6 +123,9 @@ class AppController extends ChangeNotifier {
     _phaseSub = bridge.phaseStream.listen((p) {
       debugPrint('[zremote] bridge phase: $p');
       _phase = p;
+      if (p == BridgePhase.ready) {
+        NotificationService.instance.cancelReconnectNotification();
+      }
       notifyListeners();
     });
     _workspacesSub = bridge.workspacesStream.listen((w) {

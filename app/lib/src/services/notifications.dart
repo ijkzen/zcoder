@@ -42,6 +42,7 @@ class NotificationService {
 
   bool _initialized = false;
   bool _suppressNext = false;
+  final Set<int> _reconnectNotifIds = {};
 
   /// Init must run before runApp. [app] may be null in tests.
   Future<void> init(AppController? app) async {
@@ -146,7 +147,7 @@ class NotificationService {
     }
   }
 
-  void _handleBridgeEvent(BridgeException e) {
+  Future<void> _handleBridgeEvent(BridgeException e) async {
     final body = switch (e.reason) {
       'desktopOffline' => '桌面端已离线，正在等待重连',
       'sessionExpired' => '链接已失效，请重新扫码配对',
@@ -157,12 +158,30 @@ class NotificationService {
       'desktop-disconnected' => '与桌面端的连接已断开，正在重连',
       _ => e.message.isEmpty ? '连接中断，正在重连' : e.message,
     };
+    // Cancel previous reconnect notification before posting a new one.
+    if (_reconnectNotifIds.isNotEmpty) {
+      for (final oldId in _reconnectNotifIds) {
+        await _local.cancel(id: oldId);
+      }
+      _reconnectNotifIds.clear();
+    }
+    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    _reconnectNotifIds.add(id);
     _local.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      id: id,
       title: '连接中断',
       body: body,
       notificationDetails: _channelQuiet,
     );
+  }
+
+  /// Dismiss the current reconnect notification when the bridge recovers.
+  Future<void> cancelReconnectNotification() async {
+    if (_reconnectNotifIds.isEmpty) return;
+    for (final id in _reconnectNotifIds) {
+      await _local.cancel(id: id);
+    }
+    _reconnectNotifIds.clear();
   }
 
   /// Call while the app is foregrounded to swallow the next event (the
