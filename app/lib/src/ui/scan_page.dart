@@ -29,6 +29,14 @@ class _ScanPageState extends State<ScanPage>
   bool _invalidHint = false;
   Timer? _invalidHintTimer;
 
+  /// True when the Activity was paused (e.g. by the permission dialog) while
+  /// the controller's first [start] was still in flight. On resume, the camera
+  /// needs to be rebound so that CameraX's [ImageAnalysis] analyzer is
+  /// activated from a STARTED lifecycle state — binding it during the pause
+  /// → resume transition leaves the analyzer dormant (preview works, but
+  /// barcode detection never fires). See [_onControllerChanged].
+  bool _startInFlightOnPause = false;
+
   static const _wechatGreen = Color(0xFF07C160);
 
   @override
@@ -38,6 +46,7 @@ class _ScanPageState extends State<ScanPage>
     _controller = MobileScannerController(
       detectionSpeed: DetectionSpeed.noDuplicates,
     );
+    _controller.addListener(_onControllerChanged);
     _lineController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2400),
@@ -51,23 +60,60 @@ class _ScanPageState extends State<ScanPage>
       unawaited(_controller.toggleTorch());
     }
     WidgetsBinding.instance.removeObserver(this);
+    _controller.removeListener(_onControllerChanged);
     _invalidHintTimer?.cancel();
     _lineController.dispose();
     _controller.dispose();
     super.dispose();
   }
 
+  void _onControllerChanged() {
+    // The in-flight start() has settled. If it was interrupted by a pause
+    // (permission dialog), rebind the camera so ImageAnalysis activates.
+    if (!_startInFlightOnPause || !mounted) return;
+    if (_controller.value.isStarting) return; // still in flight
+    _startInFlightOnPause = false;
+    _rebindCamera();
+  }
+
+  /// Stop and restart the camera so that CameraX rebinds ImageAnalysis from
+  /// a STARTED lifecycle state, activating the barcode analyzer.
+  void _rebindCamera() {
+    if (!mounted) return;
+    unawaited(_controller.stop().then((_) {
+      if (mounted) unawaited(_controller.start());
+    }));
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // When the app resumes, restart the camera if it is not running.
-    // This covers three scenarios:
-    // 1. First-time permission grant: the permission dialog pauses the Activity;
-    //    MobileScanner's internal resume assumes the camera was already running
-    //    (it wasn't — permission hadn't been granted yet), so nobody restarts it.
-    // 2. Returning from system settings after manually granting permission.
-    // 3. Any other lifecycle-related camera stop (e.g. picture-in-picture).
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      // The Activity is being paused. If the controller's first start() is
+      // still in flight (e.g. the permission dialog just appeared), flag it
+      // so we can rebind on resume.
+      if (_controller.value.isStarting) {
+        _startInFlightOnPause = true;
+      }
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
-    if (mounted && !_controller.value.isRunning) {
+    if (!mounted) return;
+
+    if (_startInFlightOnPause) {
+      // The first start() was interrupted by the permission dialog. If it has
+      // already settled by now, rebind immediately; otherwise the listener
+      // ([_onControllerChanged]) will rebind once it settles.
+      if (!_controller.value.isStarting) {
+        _startInFlightOnPause = false;
+        _rebindCamera();
+      }
+      return;
+    }
+
+    // Normal resume: restart the camera if it is not running (e.g. returning
+    // from system settings after manually granting permission).
+    if (!_controller.value.isRunning) {
       unawaited(_controller.start());
     }
   }
