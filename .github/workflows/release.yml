@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Publish Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        id: flutter
+        with:
+          channel: stable
+          cache: true
+
+      - name: Get versions
+        id: versions
+        working-directory: app
+        run: |
+          echo "flutter=$(flutter --version | head -1)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK (arm64)
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.versions.outputs.tag }}
+          name: ${{ steps.versions.outputs.tag }}
+          prerelease: false
+          generate_release_notes: true
+          files: app/build/app/outputs/flutter-apk/app-release.apk
+          body: |
+            ## ${{ steps.versions.outputs.tag }}
+
+            | 字段 | 值 |
+            |---|---|
+            | 日期 | ${{ steps.versions.outputs.date }} |
+            | Commit | [`${{ steps.versions.outputs.commit }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+            | Flutter | ${{ steps.versions.outputs.flutter }} |
+
+            > 仅包含 arm64 架构（覆盖绝大多数现代 Android 设备）。
+            > 可在应用内「设置 → 检查更新」直接下载安装，也可手动下载 APK 安装。
