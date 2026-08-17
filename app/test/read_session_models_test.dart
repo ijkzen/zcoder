@@ -98,13 +98,13 @@ void main() {
       expect(usage.cacheHitRate, closeTo(0.9983, 0.0001));
     });
 
-    test('falls back to cumulative cacheRead/input for hit rate', () {
+    test('cache without hitRate stays null (no derived ratio)', () {
       final usage = ContextUsage.fromJson({
         'used': 100,
         'size': 200,
         'cache': {'cacheReadTokens': 80, 'inputTokens': 100},
       });
-      expect(usage.cacheHitRate, closeTo(0.8, 0.001));
+      expect(usage.cacheHitRate, isNull);
     });
 
     test('empty input stays null-safe', () {
@@ -112,6 +112,76 @@ void main() {
       expect(usage.fillRatio, isNull);
       expect(usage.cacheHitRate, isNull);
       expect(usage.breakdown, isEmpty);
+    });
+  });
+
+  group('ConversationUsage (snapshot usage.contextWindow)', () {
+    test('parses contextWindow.cache.hitRate', () {
+      final usage = ConversationUsage.fromJson({
+        'contextWindow': {
+          'usedTokens': 107654,
+          'maxTokens': 1000000,
+          'autoCompactThresholdTokens': null,
+          'cache': {'hitRate': 0.981, 'hitRateRequestCount': 46},
+          'breakdown': [
+            {'source': 'messages', 'chars': 68000},
+            {'source': 'system_tool_schemas', 'chars': 18000},
+          ],
+        },
+        'cumulative': {
+          'inputTokens': 107800,
+          'outputTokens': 26500,
+          'cacheReadTokens': 128,
+          'cacheWriteTokens': 0,
+        },
+      });
+
+      expect(usage.usedTokens, 107654);
+      expect(usage.maxTokens, 1000000);
+      expect(usage.cacheHitRate, closeTo(0.981, 0.0001));
+      expect(usage.breakdown, hasLength(2));
+      expect(usage.breakdown.first.source, 'messages');
+      expect(usage.cumulative?['cacheReadTokens'], 128);
+    });
+
+    test('no contextWindow/cache stays null-safe', () {
+      const usage = ConversationUsage();
+      expect(usage.usedTokens, isNull);
+      expect(usage.cacheHitRate, isNull);
+      expect(usage.breakdown, isEmpty);
+      expect(ConversationUsage.fromJson(null).cacheHitRate, isNull);
+      expect(
+        ConversationUsage.fromJson({'contextWindow': null}).cacheHitRate,
+        isNull,
+      );
+    });
+  });
+
+  group('ConversationSnapshot usage passthrough', () {
+    test('carries the usage field for the token sheet', () {
+      final snapshot = ConversationSnapshot.fromJson({
+        'sessionId': 's1',
+        'logEpoch': 'e1',
+        'seq': 1,
+        'revision': 0,
+        'control': const {},
+        'usage': {
+          'contextWindow': {
+            'usedTokens': 9000,
+            'maxTokens': 1000000,
+            'cache': {'hitRate': 0.95},
+          },
+          'cumulative': const {},
+        },
+        'rows': {'window': const [], 'totalCount': 0, 'firstRowId': 0},
+        'pendingInteractions': const [],
+        'pendingCommands': const [],
+      });
+      expect(snapshot.usage, isNotNull);
+      expect(
+        ConversationUsage.fromJson(snapshot.usage).cacheHitRate,
+        closeTo(0.95, 0.0001),
+      );
     });
   });
 

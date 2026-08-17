@@ -687,6 +687,11 @@ class ConversationSnapshot {
   /// — the authoritative todo list, delivered via conversation frames
   /// (status uses `inProgress` camelCase here, unlike readSession `todos`).
   final Map<String, Object?>? plan;
+  /// Live token usage (`{contextWindow: {usedTokens, maxTokens, cache,
+  /// breakdown}, cumulative}`) — the web client's chat-header cache-hit-rate
+  /// row reads `contextWindow.cache.hitRate` from here, so this is the source
+  /// the token sheet mirrors for 平均缓存命中率.
+  final Map<String, Object?>? usage;
   final List<Map<String, Object?>> pendingInteractions;
   final List<Map<String, Object?>> pendingCommands;
   final List<ConversationRow> rows;
@@ -705,6 +710,7 @@ class ConversationSnapshot {
     this.config,
     this.queue,
     this.plan,
+    this.usage,
     required this.pendingInteractions,
     required this.pendingCommands,
     required this.rows,
@@ -755,6 +761,9 @@ class ConversationSnapshot {
           : null,
       plan: json['plan'] is Map<String, Object?>
           ? json['plan'] as Map<String, Object?>
+          : null,
+      usage: json['usage'] is Map<String, Object?>
+          ? json['usage'] as Map<String, Object?>
           : null,
       pendingInteractions: interactions,
       pendingCommands: pendingCommands,
@@ -1132,17 +1141,67 @@ class ContextUsage {
 
   double? get fillRatio => size <= 0 ? null : (used / size).clamp(0.0, 1.0);
 
-  /// Average cache hit rate: prefer the runtime's rolling `hitRate`, fall back
-  /// to cacheReadTokens / inputTokens.
+  /// Average cache hit rate: the runtime's rolling `hitRate` — the same field
+  /// the desktop chat header displays. Null when the runtime produced none
+  /// (the token sheet then shows an em dash instead of a derived ratio).
   double? get cacheHitRate {
-    final cache = this.cache;
     final hit = cache?['hitRate'];
     if (hit is num) return hit.toDouble().clamp(0.0, 1.0);
-    final read = cache?['cacheReadTokens'];
-    final input = cache?['inputTokens'];
-    if (read is num && input is num && input > 0) {
-      return (read / input).clamp(0.0, 1.0);
-    }
+    return null;
+  }
+}
+
+/// `snapshot.usage` — live token usage pushed in conversation snapshots and
+/// `state.updated` patches (doc 05). The web client's chat header reads
+/// `contextWindow.cache.hitRate` from this object for its cache-hit-rate row,
+/// so this is the source the token sheet mirrors for 平均缓存命中率.
+class ConversationUsage {
+  final int? usedTokens;
+  final int? maxTokens;
+  final int? autoCompactThresholdTokens;
+  final Map<String, Object?>? cache;
+  final List<ContextBreakdownEntry> breakdown;
+  final Map<String, Object?>? cumulative;
+
+  const ConversationUsage({
+    this.usedTokens,
+    this.maxTokens,
+    this.autoCompactThresholdTokens,
+    this.cache,
+    this.breakdown = const [],
+    this.cumulative,
+  });
+
+  factory ConversationUsage.fromJson(Map<String, Object?>? json) {
+    if (json == null) return const ConversationUsage();
+    final window = json['contextWindow'];
+    final windowMap = window is Map<String, Object?> ? window : null;
+    final cache = windowMap?['cache'];
+    final breakdownJson = windowMap?['breakdown'];
+    return ConversationUsage(
+      usedTokens: windowMap?['usedTokens'] as int?,
+      maxTokens: windowMap?['maxTokens'] as int?,
+      autoCompactThresholdTokens:
+          windowMap?['autoCompactThresholdTokens'] as int?,
+      cache: cache is Map<String, Object?> ? cache : null,
+      breakdown: breakdownJson is List
+          ? breakdownJson
+                .whereType<Map<String, Object?>>()
+                .map(ContextBreakdownEntry.fromJson)
+                .toList()
+          : const [],
+      cumulative: json['cumulative'] is Map<String, Object?>
+          ? json['cumulative'] as Map<String, Object?>
+          : null,
+    );
+  }
+
+  /// Rolling average cache hit rate from `contextWindow.cache.hitRate` — the
+  /// exact field the desktop chat header displays. Null when the runtime has
+  /// not produced a hit rate yet.
+  double? get cacheHitRate {
+    final hit = cache?['hitRate'];
+    if (hit is num) return hit.toDouble().clamp(0.0, 1.0);
     return null;
   }
 }

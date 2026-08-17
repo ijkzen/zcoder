@@ -129,4 +129,60 @@ void main() {
       expect(s.plan, isNull);
     });
   });
+
+  group('usage (snapshot usage.contextWindow cache hit rate)', () {
+    test('applySnapshot parses usage into the state', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+        'usage': {
+          'contextWindow': {
+            'usedTokens': 90000,
+            'maxTokens': 1000000,
+            'cache': {'hitRate': 0.981},
+          },
+          'cumulative': {'inputTokens': 100, 'outputTokens': 20},
+        },
+      }));
+      expect(s.usage?.usedTokens, 90000);
+      expect(s.usage?.cacheHitRate, closeTo(0.981, 0.0001));
+    });
+
+    test('state.updated patch with usage replaces the field', () {
+      final s = state();
+      s.applyDelta({
+        'op': 'state.updated',
+        'patch': {
+          'usage': {
+            'contextWindow': {
+              'usedTokens': 120000,
+              'maxTokens': 1000000,
+              'cache': {'hitRate': 0.982},
+            },
+            'cumulative': const {},
+          },
+        },
+      });
+      expect(s.usage?.cacheHitRate, closeTo(0.982, 0.0001));
+      expect(s.control.containsKey('usage'), isFalse);
+    });
+
+    test('usage stays null when no frame carried it', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+      }));
+      expect(s.usage, isNull);
+      s.applyDelta({'op': 'state.updated', 'patch': {'plan': {'items': []}}});
+      expect(s.usage, isNull);
+    });
+  });
 }

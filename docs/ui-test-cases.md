@@ -187,7 +187,7 @@
 | TC-CONV-020 | 有待处理审批/提问 | 观察输入区上方 | 出现「审批 · N」「提问 · N」chip（Badge 计数）；**打开会话后首次检测到时自动弹出对应 sheet 一次**；之后靠 chip 徽标提醒 |
 | TC-CONV-021 | 有 TodoWrite 待办 | 点右下 Todo FAB（Badge 计数） | 弹待办 sheet：「待办 · done/total」，各项状态图标+状态色+完成划线 |
 | TC-CONV-022 | 会话菜单 | 「压缩会话」→ 确认（红色按钮，文案「不可撤销」） | SnackBar「已发送压缩请求」；压缩完成后出现 TimelineMarker 行 |
-| TC-CONV-023 | AppBar | 点 Token 图标 | Token 使用详情 sheet：上下文填充条、来源构成条、缓存命中率、累计输入/输出/请求次数 |
+| TC-CONV-023 | AppBar | 点 Token 图标 | Token 使用详情 sheet：上下文填充条、来源构成条、平均缓存命中率（取会话快照 `usage.contextWindow.cache.hitRate`，与桌面端聊天头部显示一致；无数据时显示 —，**不用** getTaskTokenUsage 累计 cacheRead/input 兜底）、累计输入/输出/请求次数 |
 | TC-CONV-024 | 会话详情页 | 系统返回键 / 返回按钮 | 关闭会话（停止轮询/退订）返回会话列表 |
 | TC-CONV-025 | 会话菜单 | 「暂停目标」/「恢复目标」 | 目标暂停后 agent 停止推进；恢复后继续；状态在阶段小字体现 |
 | TC-CONV-026 | 会话页内断线后重连成功 | 观察页面 | 自动恢复：重订阅 + 轮询续传，对话流与状态自洽，无需退出重进 |

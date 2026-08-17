@@ -687,6 +687,7 @@ class _ConversationPageState extends State<ConversationPage> {
       isScrollControlled: true,
       builder: (sheetContext) => _TokenUsageSheet(
         usage: state.contextUsage,
+        liveUsage: state.usage,
         tokenUsage: state.tokenUsage,
       ),
     );
@@ -2585,8 +2586,13 @@ class _PlansSheet extends StatelessWidget {
 
 class _TokenUsageSheet extends StatelessWidget {
   final ContextUsage usage;
+
+  /// Live usage pushed with conversation frames (`snapshot.usage` /
+  /// `state.updated`) — `contextWindow.cache.hitRate` is what the desktop's
+  /// chat header shows, so this wins over the readSession poll's `usage`.
+  final ConversationUsage? liveUsage;
   final Map<String, Object?>? tokenUsage;
-  const _TokenUsageSheet({required this.usage, this.tokenUsage});
+  const _TokenUsageSheet({required this.usage, this.liveUsage, this.tokenUsage});
 
   static const _sourceLabels = <String, String>{
     'messages': '消息',
@@ -2614,7 +2620,7 @@ class _TokenUsageSheet extends StatelessWidget {
     final ratio = usage.fillRatio;
     final breakdown = usage.breakdown;
     final totalChars = breakdown.fold<int>(0, (s, e) => s + e.chars);
-    final hitRate = usage.cacheHitRate ?? _cumulativeHitRate(tokenUsage);
+    final hitRate = liveUsage?.cacheHitRate ?? usage.cacheHitRate;
     final token = tokenUsage;
 
     return SafeArea(
@@ -2740,16 +2746,6 @@ class _TokenUsageSheet extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  static double? _cumulativeHitRate(Map<String, Object?>? token) {
-    if (token == null) return null;
-    final read = token['cacheReadTokens'];
-    final input = token['inputTokens'];
-    if (read is num && input is num && input > 0) {
-      return (read / input).clamp(0.0, 1.0);
-    }
-    return null;
   }
 }
 

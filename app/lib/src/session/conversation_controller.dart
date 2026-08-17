@@ -29,6 +29,10 @@ class ConversationState {
   /// Live TodoWrite state (`{items: [{id, content, status}], updatedAt}`)
   /// from the conversation snapshot (authoritative todo list via frames).
   Map<String, Object?>? plan;
+  /// Live token usage from the snapshot's `usage` field (and `state.updated`
+  /// patches) — `contextWindow.cache.hitRate` is the desktop's chat-header
+  /// cache-hit-rate source, pushed in real time via frames.
+  ConversationUsage? usage;
   /// Flat todo list from the readSession poll (`runtime.todos` /
   /// `todoGroups` — the web client's todo panel source). Null when the poll
   /// response carried none.
@@ -59,6 +63,7 @@ class ConversationState {
     ContextUsage? contextUsage,
     SessionModelConfig? modelConfig,
     this.tokenUsage,
+    this.usage,
     this.sessionStatus = '',
   }) : control = control ?? const {},
        pendingInteractions = pendingInteractions ?? const [],
@@ -174,6 +179,9 @@ class ConversationState {
     config = snapshot.config;
     queue = snapshot.queue;
     plan = snapshot.plan;
+    usage = snapshot.usage == null
+        ? null
+        : ConversationUsage.fromJson(snapshot.usage);
     pendingInteractions = snapshot.pendingInteractions
         .map(PendingInteraction.fromJson)
         .toList();
@@ -229,8 +237,8 @@ class ConversationState {
   }
 
   /// A `state.updated` patch is a partial update of **top-level** snapshot
-  /// fields (queue / inputRouting / meta / config / availability / control),
-  /// not a bag of keys to merge into `control` (doc 08 §2.1, §4.3).
+  /// fields (usage / queue / inputRouting / meta / config / availability /
+  /// control), not a bag of keys to merge into `control` (doc 08 §2.1, §4.3).
   void _applyStatePatch(Map<String, Object?> patch) {
     patch.forEach((k, v) {
       switch (k) {
@@ -244,6 +252,10 @@ class ConversationState {
           queue = v is Map<String, Object?> ? v : null;
         case 'plan':
           plan = v is Map<String, Object?> ? v : null;
+        case 'usage':
+          usage = v is Map<String, Object?>
+              ? ConversationUsage.fromJson(v)
+              : null;
         case 'inputRouting':
           inputRouting = v is Map<String, Object?> ? v : null;
         case 'meta':
