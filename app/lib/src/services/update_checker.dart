@@ -121,12 +121,16 @@ class SemVer implements Comparable<SemVer> {
   @override
   String toString() => '$major.$minor.$patch';
 
-  /// Parses a tag like `v0.5.0` or `0.5.0` into [SemVer].
+  /// Parses a tag like `v0.5.0`, `0.5.0`, or `v0.5.0+12` into [SemVer].
+  /// Build metadata after `+` is stripped before parsing.
   /// Returns null when the tag is not a version string (e.g. `nightly`).
   static SemVer? tryParse(String tag) {
-    final cleaned = tag.startsWith('v') || tag.startsWith('V')
+    var cleaned = tag.startsWith('v') || tag.startsWith('V')
         ? tag.substring(1)
         : tag;
+    // Strip build metadata (e.g. "+12") — not part of semver precedence.
+    final plusIdx = cleaned.indexOf('+');
+    if (plusIdx != -1) cleaned = cleaned.substring(0, plusIdx);
     final parts = cleaned.split('.');
     if (parts.length < 2 || parts.length > 3) return null;
     try {

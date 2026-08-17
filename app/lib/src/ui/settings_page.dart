@@ -13,7 +13,7 @@ import '../services/update_checker.dart';
 import '../storage/app_database.dart';
 
 /// App version from pubspec — kept in sync manually with pubspec.yaml.
-const appVersion = '0.4.4';
+const appVersion = '0.4.6';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
