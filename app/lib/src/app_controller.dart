@@ -908,22 +908,31 @@ class AppController extends ChangeNotifier {
 
   /// The remembered provider/model/thought selection for new sessions in this
   /// workspace (null or partial values fall back to the workspace defaults).
-  Future<WorkspaceModelPrefs?> loadWorkspaceModelPrefs(String workspaceKey) =>
-      db.getWorkspaceModelPrefs(workspaceKey);
+  Future<WorkspaceModelPrefs?> loadWorkspaceModelPrefs(String workspaceKey) async {
+    final prefs = await db.getWorkspaceModelPrefs(workspaceKey);
+    zlog(
+      '[zremote] prefs load key=$workspaceKey → '
+      '${prefs == null ? 'null' : '${prefs.provider}/${prefs.model}/${prefs.thoughtLevel}'}',
+    );
+    return prefs;
+  }
 
   Future<void> saveWorkspaceModelPrefs(
     String workspaceKey, {
     String? provider,
     String? model,
     String? thoughtLevel,
-  }) => db.saveWorkspaceModelPrefs(
-    WorkspaceModelPrefs(
-      workspaceKey: workspaceKey,
-      provider: provider,
-      model: model,
-      thoughtLevel: thoughtLevel,
-    ),
-  );
+  }) async {
+    zlog('[zremote] prefs save key=$workspaceKey → $provider/$model/$thoughtLevel');
+    await db.saveWorkspaceModelPrefs(
+      WorkspaceModelPrefs(
+        workspaceKey: workspaceKey,
+        provider: provider,
+        model: model,
+        thoughtLevel: thoughtLevel,
+      ),
+    );
+  }
 
   Future<void> clearWorkspaceModelPrefs(String workspaceKey) =>
       db.clearWorkspaceModelPrefs(workspaceKey);

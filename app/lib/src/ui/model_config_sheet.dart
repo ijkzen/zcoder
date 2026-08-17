@@ -80,6 +80,12 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
   String? _thought;
   bool _busy = false;
 
+  /// Whether the current (_model, _thought) selection has been sent to
+  /// onApply. A model tap that merely advances to the thought level leaves
+  /// the selection unapplied; the 完成 button then applies it with the
+  /// thought level shown as current.
+  bool _applied = false;
+
   /// Locally selected collaboration mode (optimistic: the chip highlights
   /// immediately; the caller persists via onModeChanged).
   String? _mode;
@@ -127,6 +133,7 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
     setState(() {
       _model = model;
       _thought = null;
+      _applied = false;
     });
     if (model.reasoningLevels.isEmpty &&
         widget.config.availableThoughtLevels.isEmpty) {
@@ -148,6 +155,7 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
     setState(() => _busy = true);
     try {
       await widget.onApply(provider, model, thought);
+      _applied = true;
       if (mounted && widget.autoClose) Navigator.of(context).pop();
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -288,7 +296,21 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonal(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () async {
+                    // A model picked without a thought-level tap was never
+                    // applied — apply it now with the thought level shown as
+                    // current, otherwise the choice is silently discarded.
+                    final navigator = Navigator.of(context);
+                    final model = _model;
+                    if (model != null && !_applied) {
+                      await _apply(
+                        model.provider,
+                        model.model,
+                        _thought ?? widget.config.thoughtLevel,
+                      );
+                    }
+                    if (mounted) navigator.pop();
+                  },
                   child: const Text('完成'),
                 ),
               ),

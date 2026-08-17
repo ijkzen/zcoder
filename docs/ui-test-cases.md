@@ -259,6 +259,7 @@
 | TC-MODEL-002 | Provider 级 | 点某 Provider | 进入 Model 级，显示该 provider 模型列表（label + 上下文 tokens） |
 | TC-MODEL-003 | Model 级 | 点某模型 | 有思考等级 → 进入 Thought 级；无思考等级且无全局 thought 列表 → 直接应用并关闭 |
 | TC-MODEL-004 | Thought 级 | 点思考等级 | 应用选择；autoClose:false 时需点「完成」关闭 |
+| TC-MODEL-004a | autoClose:false，已点模型进入 Thought 级但未点思考等级 | 点「完成」 | **以面包屑当前思考等级补应用该模型再关闭**（不得静默丢弃）；仅点到 Provider 级则「完成」不应用任何选择 |
 | TC-MODEL-005 | level>0 | 点左上「返回」 | 逐级回退，面包屑同步 |
 | TC-MODEL-006 | 模型无思考等级 | 进入 Thought 级 | 显示「该模型不支持思考等级」 |
 | TC-MODEL-007 | 会话内打开（onModeChanged 存在） | 点协作模式 chip（build/edit/plan/yolo） | 乐观高亮并应用 |

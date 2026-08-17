@@ -139,4 +139,124 @@ void main() {
       expect(queueChip.selected, isFalse);
     });
   });
+
+  group('ModelConfigSheet 完成 applies pending model selection', () {
+    final config = SessionModelConfig(
+      provider: 'p1',
+      model: 'm1',
+      thoughtLevel: 'high',
+      availableModels: const [
+        ModelOption(
+          provider: 'p1',
+          providerLabel: 'P1',
+          model: 'm1',
+          label: 'Model One',
+          reasoningLevels: [
+            ThoughtLevelOption(value: 'low', label: 'low'),
+            ThoughtLevelOption(value: 'high', label: 'high'),
+          ],
+        ),
+        ModelOption(
+          provider: 'p1',
+          providerLabel: 'P1',
+          model: 'm2',
+          label: 'Model Two',
+          reasoningLevels: [
+            ThoughtLevelOption(value: 'low', label: 'low'),
+            ThoughtLevelOption(value: 'high', label: 'high'),
+          ],
+        ),
+      ],
+    );
+
+    Future<void> openSheet(
+      WidgetTester tester,
+      Future<void> Function(String p, String m, String? t) onApply,
+    ) async {
+      // Phone-sized surface so the sheet (list height = 42% of screen) fits.
+      tester.view.physicalSize = const Size(1080, 2160);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showModalBottomSheet<void>(
+                  context: context,
+                  builder: (_) => ModelConfigSheet(
+                    config: config,
+                    autoClose: false,
+                    onApply: onApply,
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('model tap + 完成 (no thought tap) applies with current thought',
+        (tester) async {
+      final applied = <List<String?>>[];
+      await openSheet(tester, (p, m, t) async => applied.add([p, m, t]));
+
+      await tester.tap(find.text('P1'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Model Two'));
+      await tester.pumpAndSettle();
+      // Thought level reached, nothing applied yet.
+      expect(applied, isEmpty);
+      expect(find.text('第 3 级 · 选择Thought'), findsOneWidget);
+
+      await tester.tap(find.text('完成'));
+      await tester.pumpAndSettle();
+      expect(
+        applied,
+        [
+          ['p1', 'm2', 'high'],
+        ],
+      );
+      // Sheet closed.
+      expect(find.text('完成'), findsNothing);
+    });
+
+    testWidgets('thought tap applies immediately; 完成 does not double-apply',
+        (tester) async {
+      final applied = <List<String?>>[];
+      await openSheet(tester, (p, m, t) async => applied.add([p, m, t]));
+
+      await tester.tap(find.text('P1'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Model Two'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('low'));
+      await tester.pumpAndSettle();
+      expect(
+        applied,
+        [
+          ['p1', 'm2', 'low'],
+        ],
+      );
+
+      await tester.tap(find.text('完成'));
+      await tester.pumpAndSettle();
+      expect(applied.length, 1);
+    });
+
+    testWidgets('完成 with provider only applies nothing', (tester) async {
+      final applied = <List<String?>>[];
+      await openSheet(tester, (p, m, t) async => applied.add([p, m, t]));
+
+      await tester.tap(find.text('P1'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('完成'));
+      await tester.pumpAndSettle();
+      expect(applied, isEmpty);
+    });
+  });
 }
