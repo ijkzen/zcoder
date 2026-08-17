@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 项目文档 / Documentation
+    url: https://github.com/ijkzen/zcoder/tree/master/docs
+    about: 协议（英文）与 UI 测试用例（中文）文档 / Protocol and UI test-case docs

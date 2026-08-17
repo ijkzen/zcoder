@@ -1,0 +1,20 @@
+# Normalize line endings and mark binary files — see https://git-scm.com/docs/gitattributes
+* text=auto
+
+# Text files that must always use LF
+*.dart text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.apk binary
+*.aab binary
+*.keystore binary
+*.jar binary

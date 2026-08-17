@@ -1,5 +1,8 @@
 # ZCode 远程（Flutter）
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/ijkzen/zcoder/ci.yml?label=CI&logo=github)](https://github.com/ijkzen/zcoder/actions/workflows/ci.yml)
+
 用 Flutter 重写的 ZCode 远程控制客户端——替代官方 Web 远程控制页面（`https://zcode.z.ai/remote/v4`）。Android 原生 Material 3 应用。
 
 ## 解决的问题
@@ -63,3 +66,19 @@ lib/
 - 命令：`sendConversationCommandV4`（sendText / stop / resolveInteraction / createSession …）
 
 详见 `docs/adr/0001-sid-hash-terminal-auth.md` 与 `CONTEXT.md`。
+
+## 贡献 / Contributing
+
+欢迎提交 issue 与 PR，请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)（开发环境、提交规范与 PR 流程）和 [CONTEXT.md](CONTEXT.md)（术语表）。参与即代表遵守 [行为准则](CODE_OF_CONDUCT.md)。
+
+## 安全 / Security
+
+发现安全漏洞请通过 [SECURITY.md](SECURITY.md) 的私有渠道上报，勿在公开 issue 中提交。**注意：配对二维码（`sid + hash`）即远程控制凭据，请勿公开分享。**
+
+## 更新日志 / Changelog
+
+见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证 / License
+
+本项目基于 [MIT License](LICENSE) 发布。
