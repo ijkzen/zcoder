@@ -242,6 +242,13 @@ class _RequestSheetState extends State<RequestSheet> {
         if (optionId == null) return null;
         return {'optionId': optionId};
       case _FreeTextPage(:final request):
+        // ExitPlanMode (plan_approval) is an elicitation — the desktop
+        // resolves it with {action: "accept"}, not {optionId}.
+        if (request.isExitPlanMode) {
+          final selected = _simpleOptionSelections[request.requestId];
+          if (selected != null) return {'action': 'accept'};
+          return null;
+        }
         final simple = _simpleOptionSelections[request.requestId];
         if (simple != null) return {'optionId': simple};
         final text = _freeTextController(request.requestId).text.trim();
@@ -254,12 +261,15 @@ class _RequestSheetState extends State<RequestSheet> {
   /// client: question/elicitation pages send action "decline"; permissions
   /// resolve their deny option (no deny option → just close, the runtime's
   /// deadline resolves it). Free-text pages have no cancel path at all (the
-  /// desktop's free-text dialog cannot be cancelled either).
+  /// desktop's free-text dialog cannot be cancelled either) — except
+  /// ExitPlanMode which is an elicitation and should decline.
   Map<String, Object?>? _cancelAnswerFor(_SheetPage page) {
     switch (page) {
       case _QuestionPage():
         return {'action': 'decline'};
-      case _FreeTextPage():
+      case _FreeTextPage(:final request):
+        // ExitPlanMode (plan_approval) is an elicitation — decline it.
+        if (request.isExitPlanMode) return {'action': 'decline'};
         return null;
       case _PermissionPage(:final request):
         final deny = request.options.where((o) => o.kind == 'deny').firstOrNull;
