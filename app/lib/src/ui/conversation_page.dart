@@ -2,10 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app_controller.dart';
@@ -13,7 +11,8 @@ import '../session/conversation_controller.dart';
 import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'request_sheet.dart';
-import 'command_suggestion_panel.dart';
+import 'attachment_picker.dart';
+import 'chat_composer.dart';
 import 'model_config_sheet.dart';
 import 'markdown_skill_badge.dart';
 import 'mono_text.dart';
@@ -50,8 +49,6 @@ class _ConversationPageState extends State<ConversationPage> {
   static final Map<String, Uint8List> attachmentCache = {};
 
   final _scrollController = ScrollController();
-  final _inputController = TextEditingController();
-  bool _sending = false;
   bool _atBottom = true;
 
   /// Row id of the newest row already rendered — drives the smart-scroll
@@ -71,8 +68,9 @@ class _ConversationPageState extends State<ConversationPage> {
     if (_hasPlans) return true;
     final state = _state;
     if (state == null) return false;
-    return state.orderedRows
-        .any((r) => r is ToolCallRow && r.toolName == 'ExitPlanMode');
+    return state.orderedRows.any(
+      (r) => r is ToolCallRow && r.toolName == 'ExitPlanMode',
+    );
   }
 
   // Pending attachments: uploaded descriptors `{ref, fileName, mime, bytes}`
@@ -142,16 +140,17 @@ class _ConversationPageState extends State<ConversationPage> {
     _olderDebounce?.cancel();
     widget.app.removeListener(_onAppTick);
     _scrollController.dispose();
-    _inputController.dispose();
     _approvalsNotifier.dispose();
     _questionsNotifier.dispose();
     widget.app.closeConversation();
     super.dispose();
   }
 
-  Future<void> _send() async {
-    final text = _inputController.text.trim();
-    if (text.isEmpty && _attachments.isEmpty) return;
+  /// ChatComposer onSend: returns true when the text was accepted (the
+  /// composer then clears itself); on failure the draft stays.
+  Future<bool> _sendText(String rawText) async {
+    final text = rawText.trim();
+    if (text.isEmpty && _attachments.isEmpty) return false;
     // inputRouting.mode == 'choice' means the user picks: keep the queue and
     // append this message, or clear the queue and jump it in. Only asked when
     // the queue is non-empty (matches the web client & zemote, doc 08 §2.2).
@@ -161,9 +160,8 @@ class _ConversationPageState extends State<ConversationPage> {
         state.inputRoutingMode == 'choice' &&
         state.queueItems.isNotEmpty) {
       heldDisposition = await _askHeldQueueDisposition();
-      if (heldDisposition == null) return; // user cancelled
+      if (heldDisposition == null) return false; // user cancelled
     }
-    setState(() => _sending = true);
     try {
       // The desktop may be mid-restart (runtime respawns after relay
       // reconnect); a timeout keeps the send button from staying disabled.
@@ -182,24 +180,21 @@ class _ConversationPageState extends State<ConversationPage> {
         final reason = result['reasonCode']?.toString() ?? '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              reason.isEmpty ? '消息被拒绝发送' : '消息被拒绝发送：$reason',
-            ),
+            content: Text(reason.isEmpty ? '消息被拒绝发送' : '消息被拒绝发送：$reason'),
           ),
         );
       }
-      _inputController.clear();
       _attachments.clear();
       setState(() {});
       _backToBottom();
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('发送失败：$e')));
       }
-    } finally {
-      if (mounted) setState(() => _sending = false);
+      return false;
     }
   }
 
@@ -621,9 +616,9 @@ class _ConversationPageState extends State<ConversationPage> {
     if (_plansFetched) return;
     _plansFetched = true;
     try {
-      final plans = await widget.app
-          .fetchPlans()
-          .timeout(const Duration(seconds: 15));
+      final plans = await widget.app.fetchPlans().timeout(
+        const Duration(seconds: 15),
+      );
       if (!mounted) return;
       final raw = plans['plans'];
       final list = raw is List
@@ -647,9 +642,9 @@ class _ConversationPageState extends State<ConversationPage> {
   /// ExitPlanMode tool-call rows) and shows them in a sheet.
   Future<void> _showPlansSheet() async {
     try {
-      final plans = await widget.app
-          .fetchPlans()
-          .timeout(const Duration(seconds: 15));
+      final plans = await widget.app.fetchPlans().timeout(
+        const Duration(seconds: 15),
+      );
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,
@@ -898,89 +893,26 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Input bar ----------
 
-  final _inputFocusNode = FocusNode();
-
   // ---------- Attachments ----------
 
-  String _mimeFor(String name) {
-    final ext = name.split('.').last.toLowerCase();
-    switch (ext) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'png':
-        return 'image/png';
-      case 'gif':
-        return 'image/gif';
-      case 'webp':
-        return 'image/webp';
-      case 'pdf':
-        return 'application/pdf';
-      case 'txt':
-        return 'text/plain';
-      case 'md':
-        return 'text/markdown';
-      case 'json':
-        return 'application/json';
-      case 'zip':
-        return 'application/zip';
-      default:
-        return 'application/octet-stream';
-    }
-  }
-
   Future<void> _pickAttachment() async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('从相册选择图片'),
-              onTap: () => Navigator.pop(sheetContext, 'image'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.insert_drive_file_outlined),
-              title: const Text('选择文件'),
-              onTap: () => Navigator.pop(sheetContext, 'file'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (choice == null || !mounted) return;
+    final PickedAttachment? picked;
     try {
-      if (choice == 'image') {
-        final picked = await ImagePicker().pickImage(
-          source: ImageSource.gallery,
-          maxWidth: 2048,
-        );
-        if (picked == null || !mounted) return;
-        await _uploadAttachment(
-          name: picked.name,
-          mime: _mimeFor(picked.name),
-          bytes: await picked.readAsBytes(),
-        );
-      } else {
-        final files = await FilePicker.pickFiles();
-        final file = files.isEmpty ? null : files.first;
-        if (file == null || !mounted) return;
-        await _uploadAttachment(
-          name: file.name,
-          mime: _mimeFor(file.name),
-          bytes: await file.readAsBytes(),
-        );
-      }
+      picked = await showAttachmentPicker(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('选择附件失败：$e')));
       }
+      return;
     }
+    if (picked == null || !mounted) return;
+    await _uploadAttachment(
+      name: picked.name,
+      mime: picked.mime,
+      bytes: picked.bytes,
+    );
   }
 
   Future<void> _uploadAttachment({
@@ -989,8 +921,9 @@ class _ConversationPageState extends State<ConversationPage> {
     required Uint8List bytes,
     _FailedUpload? retryOf,
   }) async {
-    final sessionId = widget.app.conversation?.state?.sessionId;
-    if (sessionId == null) return;
+    // The page's own session id — reading it from the conversation state
+    // would silently drop uploads fired before the first snapshot arrives.
+    final sessionId = widget.sessionId;
     setState(() {
       if (retryOf != null) _failedUploads.remove(retryOf);
       _uploading = true;
@@ -1117,65 +1050,13 @@ class _ConversationPageState extends State<ConversationPage> {
         ),
       );
     }
-    final attachmentBar = _buildAttachmentBar();
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CommandSuggestionPanel(
-              app: widget.app,
-              controller: _inputController,
-              focusNode: _inputFocusNode,
-            ),
-            if (attachmentBar != null) ...[
-              attachmentBar,
-              const SizedBox(height: 6),
-            ],
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: IconButton.filledTonal(
-                    tooltip: '添加附件',
-                    onPressed: _sending || _uploading ? null : _pickAttachment,
-                    icon: const Icon(Icons.attach_file),
-                  ),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    focusNode: _inputFocusNode,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) {
-                      // Sending mid-upload would detach the message from its
-                      // attachments — wait for the progress bar to finish.
-                      if (!_sending && !_uploading) _send();
-                    },
-                    decoration: const InputDecoration(
-                      hintText: '给 agent 发消息…',
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _sending || _uploading ? null : _send,
-                  icon: const Icon(Icons.send),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+    return ChatComposer(
+      app: widget.app,
+      hintText: '给 agent 发消息…',
+      busy: _uploading,
+      onPickAttachment: _pickAttachment,
+      header: _buildAttachmentBar(),
+      onSend: _sendText,
     );
   }
 
@@ -1527,9 +1408,7 @@ MarkdownStyleSheet _markdownSheet(BuildContext context, Color textColor) {
       borderRadius: BorderRadius.circular(8),
     ),
     blockquoteDecoration: BoxDecoration(
-      border: Border(
-        left: BorderSide(color: scheme.outlineVariant, width: 3),
-      ),
+      border: Border(left: BorderSide(color: scheme.outlineVariant, width: 3)),
     ),
     blockquotePadding: const EdgeInsets.only(left: 12),
     listIndent: 20,
@@ -2339,14 +2218,9 @@ class _PlansSheet extends StatelessWidget {
     }
     if (value is Map) {
       Object? pick(String key) => value[key];
-      final markdown = [
-        pick('plan'),
-        pick('text'),
-        pick('content'),
-      ].whereType<String>().firstWhere(
-        (s) => s.trim().isNotEmpty,
-        orElse: () => '',
-      );
+      final markdown = [pick('plan'), pick('text'), pick('content')]
+          .whereType<String>()
+          .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
       if (markdown.trim().isNotEmpty) {
         final file = value['planFilePath'];
         return (
@@ -2391,7 +2265,11 @@ class _PlansSheet extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.assignment_outlined, size: 20, color: scheme.primary),
+                Icon(
+                  Icons.assignment_outlined,
+                  size: 20,
+                  color: scheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '计划 · ${planItems.length} 条',
@@ -2407,9 +2285,8 @@ class _PlansSheet extends StatelessWidget {
                       child: Center(
                         child: Text(
                           '暂无计划',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ),
                     )
@@ -2450,9 +2327,7 @@ class _PlansSheet extends StatelessWidget {
                                   item.plan.planFilePath!,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
+                                  style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(color: scheme.tertiary),
                                 ),
                               ),
@@ -2487,7 +2362,9 @@ class _PlansSheet extends StatelessWidget {
       if (title != null && title.isNotEmpty) return title;
     }
     for (final line in markdown.split(RegExp(r'\r?\n'))) {
-      final trimmed = line.replaceFirst(RegExp(r'^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)'), '').trim();
+      final trimmed = line
+          .replaceFirst(RegExp(r'^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)'), '')
+          .trim();
       if (trimmed.isNotEmpty) return trimmed;
     }
     return '';
@@ -2510,7 +2387,11 @@ class _TokenUsageSheet extends StatelessWidget {
   /// chat header shows, so this wins over the readSession poll's `usage`.
   final ConversationUsage? liveUsage;
   final Map<String, Object?>? tokenUsage;
-  const _TokenUsageSheet({required this.usage, this.liveUsage, this.tokenUsage});
+  const _TokenUsageSheet({
+    required this.usage,
+    this.liveUsage,
+    this.tokenUsage,
+  });
 
   static const _sourceLabels = <String, String>{
     'messages': '消息',

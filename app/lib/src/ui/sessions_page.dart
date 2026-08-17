@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
 import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'conversation_page.dart';
-import 'command_suggestion_panel.dart';
+import 'attachment_picker.dart';
+import 'chat_composer.dart';
 import 'model_config_sheet.dart';
 import 'pull_to_refresh.dart';
 
@@ -20,10 +23,6 @@ class SessionsPage extends StatefulWidget {
 }
 
 class _SessionsPageState extends State<SessionsPage> {
-  final _inputController = TextEditingController();
-  final _inputFocusNode = FocusNode();
-  bool _sending = false;
-
   /// Task-list view: 0 = all, 1 = pinned, 2 = archived.
   int _tab = 0;
 
@@ -57,8 +56,6 @@ class _SessionsPageState extends State<SessionsPage> {
 
   @override
   void dispose() {
-    _inputController.dispose();
-    _inputFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -182,10 +179,19 @@ class _SessionsPageState extends State<SessionsPage> {
     );
   }
 
-  Future<void> _createSession() async {
-    final text = _inputController.text.trim();
-    if (text.isEmpty) return;
-    setState(() => _sending = true);
+  /// ChatComposer onSend: returns true when the session was created (the
+  /// composer then clears itself); on failure the draft stays (TC-SES-024).
+  Future<bool> _createSession(String rawText) async {
+    final text = rawText.trim();
+    if (text.isEmpty) return false;
+    // With staged attachments the flow is: create an EMPTY session (no
+    // firstInput — uploads need the sessionId first) → upload each file →
+    // sendText(text + attachment descriptors) so everything lands as ONE
+    // first message. Pressing send again after a failure resumes the flow
+    // (_pendingSessionId keeps the already-created session).
+    if (_pendingAttachments.isNotEmpty || _pendingSessionId != null) {
+      return _createWithAttachments(text);
+    }
     try {
       final sessionId = await widget.app
           .createSession(
@@ -196,30 +202,223 @@ class _SessionsPageState extends State<SessionsPage> {
             mode: _draftMode,
           )
           .timeout(const Duration(seconds: 15));
-      _inputController.clear();
       // The selection stays: it is persisted for the next session too.
       // Jump straight into the new session; without an id in the command
       // result the session still shows up in the list on the next refresh.
       if (mounted && sessionId != null) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ConversationPage(
-              app: widget.app,
-              sessionId: sessionId,
-              title: text,
+        // Not awaited: onSend must return immediately so the composer clears
+        // and an open expanded editor closes — the conversation page lands
+        // on its own.
+        unawaited(
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ConversationPage(
+                app: widget.app,
+                sessionId: sessionId,
+                title: text,
+              ),
             ),
           ),
         );
       }
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('创建会话失败：$e')));
       }
-    } finally {
-      if (mounted) setState(() => _sending = false);
+      return false;
     }
+  }
+
+  Future<bool> _createWithAttachments(String text) async {
+    var sessionId = _pendingSessionId;
+    if (sessionId == null) {
+      try {
+        sessionId = await widget.app
+            .createSession(
+              null,
+              provider: _draftProvider,
+              model: _draftModel,
+              thoughtLevel: _draftThought,
+              mode: _draftMode,
+            )
+            .timeout(const Duration(seconds: 15));
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('创建会话失败：$e')));
+        }
+        return false;
+      }
+      if (sessionId == null) {
+        // Accepted without an id — we can't target the session for uploads.
+        // Keep text and staged files so nothing is lost.
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('会话已创建但未返回会话 id，请从列表进入会话后重新添加附件')),
+          );
+        }
+        return false;
+      }
+      _pendingSessionId = sessionId;
+    }
+    // Upload whatever is still staged (after a failure the loop resumes where
+    // it stopped — succeeded descriptors accumulate in _uploadedDescriptors).
+    for (final p in List<PickedAttachment>.of(_pendingAttachments)) {
+      setState(() {
+        _uploading = true;
+        _uploadingName = p.name;
+        _uploadProgress = 0;
+      });
+      try {
+        final descriptor = await widget.app.uploadAttachment(
+          sessionId,
+          fileName: p.name,
+          mime: p.mime,
+          bytes: p.bytes,
+          onProgress: (progress) {
+            if (mounted) setState(() => _uploadProgress = progress);
+          },
+        );
+        _pendingAttachments.remove(p);
+        _uploadedDescriptors.add(descriptor);
+      } catch (e) {
+        if (mounted) {
+          setState(() => _uploading = false);
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('附件上传失败：$e（修正后再点发送可续传）')));
+        }
+        return false;
+      }
+    }
+    if (mounted) setState(() => _uploading = false);
+    // The first message carries text + all attachment descriptors as one.
+    try {
+      final result = await widget.app
+          .sendText(
+            text,
+            attachments: List<Map<String, Object?>>.of(_uploadedDescriptors),
+            sessionId: sessionId,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (result['status'] == 'rejected' && mounted) {
+        final reason = result['reasonCode']?.toString() ?? '';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(reason.isEmpty ? '消息被拒绝发送' : '消息被拒绝发送：$reason'),
+          ),
+        );
+        return false;
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('发送失败：$e（再点发送可重试）')));
+      }
+      return false;
+    }
+    _pendingSessionId = null;
+    _uploadedDescriptors.clear();
+    if (mounted) {
+      // Not awaited — same reason as the no-attachment path above.
+      unawaited(
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ConversationPage(
+              app: widget.app,
+              sessionId: sessionId!,
+              title: text,
+            ),
+          ),
+        ),
+      );
+    }
+    return true;
+  }
+
+  // ---------- 新建任务暂存附件 ----------
+
+  /// Picked files staged locally until the session exists — uploaded during
+  /// the send flow so they ride the first message.
+  final _pendingAttachments = <PickedAttachment>[];
+
+  /// Mid-flow state of the attachment path: the session already created (its
+  /// first message not yet sent) and the descriptors uploaded so far. Both
+  /// exist purely so a failed send can be resumed by pressing send again.
+  String? _pendingSessionId;
+  final _uploadedDescriptors = <Map<String, Object?>>[];
+  bool _uploading = false;
+  String _uploadingName = '';
+  double _uploadProgress = 0;
+
+  Future<void> _stageAttachment() async {
+    final PickedAttachment? picked;
+    try {
+      picked = await showAttachmentPicker(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('选择附件失败：$e')));
+      }
+      return;
+    }
+    if (picked == null || !mounted) return;
+    _pendingAttachments.add(picked);
+    setState(() {});
+  }
+
+  Widget? _buildPendingAttachmentBar() {
+    if (_pendingAttachments.isEmpty && !_uploading) return null;
+    // Mid-flow (session created, uploads running/failed) the chips are locked:
+    // their bytes may already be part-uploaded, so deleting would strand the
+    // descriptor on the desktop.
+    final locked = _pendingSessionId != null;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final a in _pendingAttachments)
+          InputChip(
+            label: Text(a.name),
+            avatar: Icon(
+              a.mime.startsWith('image/')
+                  ? Icons.image_outlined
+                  : Icons.insert_drive_file_outlined,
+              size: 18,
+            ),
+            onDeleted: locked
+                ? null
+                : () => setState(() => _pendingAttachments.remove(a)),
+          ),
+        if (_uploading)
+          SizedBox(
+            width: 220,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _uploadingName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LinearProgressIndicator(value: _uploadProgress),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 
   // ---------- 条目「更多」菜单操作：重命名 / 归档 ----------
@@ -931,48 +1130,12 @@ class _SessionsPageState extends State<SessionsPage> {
               ),
             ),
             _buildModelLabel(scheme),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CommandSuggestionPanel(
-                      app: widget.app,
-                      controller: _inputController,
-                      focusNode: _inputFocusNode,
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _inputController,
-                            focusNode: _inputFocusNode,
-                            minLines: 1,
-                            maxLines: 4,
-                            textInputAction: TextInputAction.send,
-                            onSubmitted: (_) => _createSession(),
-                            decoration: const InputDecoration(
-                              hintText: '给 agent 下达新任务…',
-                              isDense: true,
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 12,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton.filled(
-                          onPressed: _sending ? null : _createSession,
-                          icon: const Icon(Icons.send),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+            ChatComposer(
+              app: widget.app,
+              hintText: '给 agent 下达新任务…',
+              onPickAttachment: _stageAttachment,
+              header: _buildPendingAttachmentBar(),
+              onSend: _createSession,
             ),
           ],
         ),

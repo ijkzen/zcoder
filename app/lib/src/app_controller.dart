@@ -370,9 +370,7 @@ class AppController extends ChangeNotifier {
       // revisionAtDecision is the base at decision time; an accepted
       // command bumps the revision by one, so the next CAS base is +1.
       final floor =
-          (status == 'accepted' ||
-                  status == 'noop' ||
-                  status == 'duplicate')
+          (status == 'accepted' || status == 'noop' || status == 'duplicate')
           ? serverRev + 1
           : serverRev;
       if (floor > (_ackedRevisions[sid] ?? 0)) {
@@ -398,8 +396,7 @@ class AppController extends ChangeNotifier {
     if (attachments != null && attachments.isNotEmpty)
       'attachments': attachments,
     'heldQueueDisposition': ?heldQueueDisposition,
-    if (expectedHeldQueueItemIds != null &&
-        expectedHeldQueueItemIds.isNotEmpty)
+    if (expectedHeldQueueItemIds != null && expectedHeldQueueItemIds.isNotEmpty)
       'expectedHeldQueueItemIds': expectedHeldQueueItemIds,
   }, sessionId: sessionId);
 
@@ -410,8 +407,7 @@ class AppController extends ChangeNotifier {
   }) => _sendCommand('sendGoalCommand', {
     'text': text,
     'heldQueueDisposition': ?heldQueueDisposition,
-    if (expectedHeldQueueItemIds != null &&
-        expectedHeldQueueItemIds.isNotEmpty)
+    if (expectedHeldQueueItemIds != null && expectedHeldQueueItemIds.isNotEmpty)
       'expectedHeldQueueItemIds': expectedHeldQueueItemIds,
   });
 
@@ -536,11 +532,7 @@ class AppController extends ChangeNotifier {
   }) async {
     await _sendCommand('resolveInteraction', {
       'interactionId': requestId,
-      'answer': {
-        'optionId': ?optionId,
-        'action': ?action,
-        'content': ?content,
-      },
+      'answer': {'optionId': ?optionId, 'action': ?action, 'content': ?content},
     });
   }
 
@@ -773,7 +765,9 @@ class AppController extends ChangeNotifier {
       }
     } catch (e) {
       // Offline — fall through to the session-only config.
-      zlog('[zremote] picker config: SESSION-FALLBACK (workspace fetch failed: $e)');
+      zlog(
+        '[zremote] picker config: SESSION-FALLBACK (workspace fetch failed: $e)',
+      );
     }
     return current;
   }
@@ -781,8 +775,14 @@ class AppController extends ChangeNotifier {
   /// Creates a session and returns the new sessionId when the command result
   /// carries one (null when the host's acceptance frame omits it — the new
   /// session still shows up in the list on the next workspace-list refresh).
+  ///
+  /// A null [firstInput] creates the session WITHOUT its first message — the
+  /// caller sends it later via sendText. Used by the attachment flow: uploads
+  /// need the sessionId first, and the attachments then ride the first
+  /// sendText so text + files land as ONE message (protocol: `firstInput?
+  /// {text, attachments?}` only takes already-uploaded descriptors).
   Future<String?> createSession(
-    String firstInput, {
+    String? firstInput, {
     String? provider,
     String? model,
     String? thoughtLevel,
@@ -793,7 +793,7 @@ class AppController extends ChangeNotifier {
     if (workspace == null) return null;
     final result = await _sendCommand('createSession', {
       'workspaceId': workspace.workspaceKey,
-      'firstInput': {'text': firstInput},
+      if (firstInput != null) 'firstInput': {'text': firstInput},
       // The desktop accepts the session's initial model/thought level as
       // `config: {provider, model, thought}` (probe-verified schema), plus
       // collaboration/followup mode. Each field is optional, so a partial
@@ -908,7 +908,9 @@ class AppController extends ChangeNotifier {
 
   /// The remembered provider/model/thought selection for new sessions in this
   /// workspace (null or partial values fall back to the workspace defaults).
-  Future<WorkspaceModelPrefs?> loadWorkspaceModelPrefs(String workspaceKey) async {
+  Future<WorkspaceModelPrefs?> loadWorkspaceModelPrefs(
+    String workspaceKey,
+  ) async {
     final prefs = await db.getWorkspaceModelPrefs(workspaceKey);
     zlog(
       '[zremote] prefs load key=$workspaceKey → '
@@ -923,7 +925,9 @@ class AppController extends ChangeNotifier {
     String? model,
     String? thoughtLevel,
   }) async {
-    zlog('[zremote] prefs save key=$workspaceKey → $provider/$model/$thoughtLevel');
+    zlog(
+      '[zremote] prefs save key=$workspaceKey → $provider/$model/$thoughtLevel',
+    );
     await db.saveWorkspaceModelPrefs(
       WorkspaceModelPrefs(
         workspaceKey: workspaceKey,
