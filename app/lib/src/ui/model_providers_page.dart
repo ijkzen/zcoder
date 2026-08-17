@@ -1,5 +1,7 @@
-/// 模型提供商管理（model-provider 通道）：列表 / 启停 / 删除 / 添加。
-/// 入口在设备页的二级菜单里——手机上配提供商是低频操作。
+/// 模型提供商管理（model-provider 通道）：列表 / 启停 / 删除。
+/// 入口在设备页的二级菜单里。供应商统一在桌面端添加/编辑，手机端不提供
+/// 添加入口（桌面端 API 格式与端点路由已演进到 v2 存储格式，单独在手机端
+/// 对齐成本较高且属低频操作）。
 library;
 
 import 'package:flutter/material.dart';
@@ -179,26 +181,6 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
     }
   }
 
-  Future<void> _showAddSheet() async {
-    final added = await showModalBottomSheet<Map<String, Object?>>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => const _AddProviderSheet(),
-    );
-    if (added == null) return;
-    final service = widget.app.modelProviderService;
-    if (service == null) return;
-    try {
-      await service.save(added);
-      widget.app.invalidateWorkspaceModelConfig();
-      await _load();
-      _toast('已添加提供商');
-    } catch (e) {
-      _toast('添加失败：$e');
-    }
-  }
-
   void _toast(String message) {
     if (mounted) {
       ScaffoldMessenger.of(
@@ -211,13 +193,6 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('模型提供商')),
-      floatingActionButton: _loading || _error != null
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _showAddSheet,
-              icon: const Icon(Icons.add),
-              label: const Text('添加提供商'),
-            ),
       body: _buildBody(),
     );
   }
@@ -330,163 +305,5 @@ class _ModelProvidersPageState extends State<ModelProvidersPage> {
           ),
       ],
     );
-  }
-}
-
-/// 添加提供商表单：名称 / 接口类型 / Base URL / API Key / 模型 ID 列表。
-/// Phone-side strict validation for the add-provider form. Returns the error
-/// message, or null when the payload is clean.
-String? validateProviderForm({
-  required String name,
-  required String baseUrl,
-  required List<String> modelIds,
-}) {
-  if (name.trim().isEmpty) return '请填写名称';
-  final url = baseUrl.trim();
-  if (url.isNotEmpty) {
-    final uri = Uri.tryParse(url);
-    final ok =
-        uri != null &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
-    if (!ok) return 'Base URL 需是合法的 http(s) 地址';
-  }
-  if (modelIds.isEmpty) return '至少填写一个模型 ID';
-  return null;
-}
-
-class _AddProviderSheet extends StatefulWidget {
-  const _AddProviderSheet();
-
-  @override
-  State<_AddProviderSheet> createState() => _AddProviderSheetState();
-}
-
-class _AddProviderSheetState extends State<_AddProviderSheet> {
-  static const _types = [
-    'anthropic-messages',
-    'openai-chat',
-    'gemini',
-    'custom',
-  ];
-
-  final _name = TextEditingController();
-  final _baseUrl = TextEditingController();
-  final _apiKey = TextEditingController();
-  final _modelIds = TextEditingController();
-  String _type = _types.first;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _baseUrl.dispose();
-    _apiKey.dispose();
-    _modelIds.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        0,
-        16,
-        MediaQuery.viewInsetsOf(context).bottom + 16,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('添加模型提供商', style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _name,
-              decoration: const InputDecoration(
-                labelText: '名称',
-                hintText: '例如 MyOpenAI',
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: _type,
-              decoration: const InputDecoration(
-                labelText: '接口类型',
-                isDense: true,
-              ),
-              items: [
-                for (final t in _types)
-                  DropdownMenuItem(value: t, child: Text(t)),
-              ],
-              onChanged: (v) {
-                if (v != null) setState(() => _type = v);
-              },
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _baseUrl,
-              decoration: const InputDecoration(
-                labelText: 'Base URL（可选）',
-                hintText: 'https://api.example.com/v1',
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _apiKey,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'API Key',
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _modelIds,
-              decoration: const InputDecoration(
-                labelText: '模型 ID（逗号分隔）',
-                hintText: 'gpt-4o, gpt-4o-mini',
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(onPressed: _submit, child: const Text('添加')),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _submit() {
-    final modelIds = _modelIds.text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-    final error = validateProviderForm(
-      name: _name.text,
-      baseUrl: _baseUrl.text,
-      modelIds: modelIds,
-    );
-    if (error != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
-      return;
-    }
-    final baseUrl = _baseUrl.text.trim();
-    Navigator.of(context).pop(<String, Object?>{
-      'name': _name.text.trim(),
-      'type': _type,
-      if (baseUrl.isNotEmpty) 'baseUrl': baseUrl,
-      if (_apiKey.text.trim().isNotEmpty) 'apiKey': _apiKey.text.trim(),
-      'modelIds': modelIds,
-      'enabled': true,
-    });
   }
 }
