@@ -26,6 +26,13 @@ class ConversationState {
   /// Held queue (`{items: [{queueItemId, text, …}], autoDrain}`). Items are
   /// passed through verbatim from the snapshot (doc 08-held-queue-integration).
   Map<String, Object?>? queue;
+  /// Live TodoWrite state (`{items: [{id, content, status}], updatedAt}`)
+  /// from the conversation snapshot (authoritative todo list via frames).
+  Map<String, Object?>? plan;
+  /// Flat todo list from the readSession poll (`runtime.todos` /
+  /// `todoGroups` — the web client's todo panel source). Null when the poll
+  /// response carried none.
+  List<Map<String, Object?>>? readSessionTodos;
   List<PendingInteraction> pendingInteractions;
   // readSession polling state (snapshot-only fields: approvals, context
   // usage and model config all come from the readSession RPC).
@@ -131,11 +138,29 @@ class ConversationState {
   }
 
   /// The parts of a readSession response the poll merges outside of
-  /// settings/runtime/projection: the session's own status.
+  /// settings/runtime/projection: the session's own status plus the live
+  /// todo list (top-level `todos` / `todoGroups` — the web client's todo
+  /// panel source; status uses `in_progress` snake_case here, unlike the
+  /// snapshot `plan` field).
   void applyReadSession(Map<String, Object?> result) {
     final session = result['session'];
     if (session is Map<String, Object?>) {
       sessionStatus = session['status']?.toString() ?? '';
+    }
+    final todos = result['todos'];
+    if (todos is List) {
+      readSessionTodos = todos.whereType<Map<String, Object?>>().toList();
+    }
+    final groups = result['todoGroups'];
+    if (groups is List) {
+      final flat = <Map<String, Object?>>[];
+      for (final g in groups.whereType<Map<String, Object?>>()) {
+        final groupTodos = g['todos'];
+        if (groupTodos is List) {
+          flat.addAll(groupTodos.whereType<Map<String, Object?>>());
+        }
+      }
+      if (flat.isNotEmpty) readSessionTodos = flat;
     }
   }
 
@@ -148,6 +173,7 @@ class ConversationState {
     meta = snapshot.meta;
     config = snapshot.config;
     queue = snapshot.queue;
+    plan = snapshot.plan;
     pendingInteractions = snapshot.pendingInteractions
         .map(PendingInteraction.fromJson)
         .toList();
@@ -216,6 +242,8 @@ class ConversationState {
           }
         case 'queue':
           queue = v is Map<String, Object?> ? v : null;
+        case 'plan':
+          plan = v is Map<String, Object?> ? v : null;
         case 'inputRouting':
           inputRouting = v is Map<String, Object?> ? v : null;
         case 'meta':
@@ -520,6 +548,8 @@ class ConversationController {
       // queue still arrives via event push (doc 08 §3.3).
       final queue = result['queue'];
       if (queue is Map<String, Object?>) state.queue = queue;
+      final plan = result['plan'];
+      if (plan is Map<String, Object?>) state.plan = plan;
       final interactions = result['pendingInteractions'];
       if (interactions is List) {
         state.pendingInteractions = interactions

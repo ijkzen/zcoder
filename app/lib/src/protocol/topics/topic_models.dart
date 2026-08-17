@@ -683,6 +683,10 @@ class ConversationSnapshot {
   /// pauseReason?}`). Items other than queueItemId/text are passed through
   /// verbatim — the client only reads those two keys.
   final Map<String, Object?>? queue;
+  /// Live TodoWrite state (`{items: [{id, content, status}], updatedAt}`)
+  /// — the authoritative todo list, delivered via conversation frames
+  /// (status uses `inProgress` camelCase here, unlike readSession `todos`).
+  final Map<String, Object?>? plan;
   final List<Map<String, Object?>> pendingInteractions;
   final List<Map<String, Object?>> pendingCommands;
   final List<ConversationRow> rows;
@@ -700,6 +704,7 @@ class ConversationSnapshot {
     this.meta,
     this.config,
     this.queue,
+    this.plan,
     required this.pendingInteractions,
     required this.pendingCommands,
     required this.rows,
@@ -747,6 +752,9 @@ class ConversationSnapshot {
           : null,
       queue: json['queue'] is Map<String, Object?>
           ? json['queue'] as Map<String, Object?>
+          : null,
+      plan: json['plan'] is Map<String, Object?>
+          ? json['plan'] as Map<String, Object?>
           : null,
       pendingInteractions: interactions,
       pendingCommands: pendingCommands,

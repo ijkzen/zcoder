@@ -270,6 +270,17 @@ class TopicSession {
     return raw is Map<String, Object?> ? raw : const {};
   }
 
+  /// Fetches the session's plan history — the TodoWrite tool-call rows
+  /// (`{plans: [...], atSeq, atLogEpoch}`), same call the reference client's
+  /// 「计划」 view uses.
+  Future<Map<String, Object?>> conversationPlans(String sessionId) async {
+    final raw = await _channel.call('conversationPlansV4', {
+      ..._conversationScope,
+      'sessionId': sessionId,
+    });
+    return raw is Map<String, Object?> ? raw : const {};
+  }
+
   /// Sends one conversation command and returns the command result. The host
   /// reads `params.envelope.clientId`, so the command must travel inside an
   /// `envelope` key with the workspace target alongside.

@@ -300,6 +300,8 @@ class _ConversationPageState extends State<ConversationPage> {
                   _runGoalCommand(widget.app.pauseGoal, '已暂停目标');
                 case 'resumeGoal':
                   _runGoalCommand(widget.app.resumeGoal, '已恢复目标');
+                case 'plans':
+                  _showPlansSheet();
               }
             },
             // Session-level state rewrites (compact) are refused while the
@@ -337,6 +339,14 @@ class _ConversationPageState extends State<ConversationPage> {
                   child: ListTile(
                     leading: Icon(Icons.play_circle_outline),
                     title: Text('恢复目标'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'plans',
+                  child: ListTile(
+                    leading: Icon(Icons.assignment_outlined),
+                    title: Text('计划'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -448,9 +458,40 @@ class _ConversationPageState extends State<ConversationPage> {
 
   // ---------- Entries row above the input bar (todos / approvals / questions) ----------
 
-  /// Latest TodoWrite call's todo list, parsed from the row stream (the same
-  /// source the desktop's web client uses — there is no dedicated todos RPC).
+  /// Latest todo list, by source priority (matches how the web client gets
+  /// its todo panel):
+  /// 1. snapshot `plan` (`{items: [{id, content, status}]}`, via frames) —
+  ///    authoritative, present even when the agent cleared the list;
+  /// 2. readSession `todos`/`todoGroups` (the 2s poll the web client uses);
+  /// 3. the latest TodoWrite tool-call row (last resort, may be missing
+  ///    after a cache reload).
+  /// Status values differ per source (`inProgress` in plan, `in_progress`
+  /// elsewhere) — normalized to `in_progress`.
   List<TodoItem>? _latestTodos(ConversationState state) {
+    final plan = state.plan;
+    if (plan != null) {
+      final planItems = plan['items'];
+      if (planItems is List) {
+        return [
+          for (final t in planItems.whereType<Map<String, Object?>>())
+            TodoItem(
+              content: (t['content'] ?? '').toString(),
+              status: _normalizeTodoStatus(t['status']?.toString()),
+            ),
+        ];
+      }
+      return const [];
+    }
+    final polled = state.readSessionTodos;
+    if (polled != null) {
+      return [
+        for (final t in polled)
+          TodoItem(
+            content: (t['content'] ?? '').toString(),
+            status: _normalizeTodoStatus(t['status']?.toString()),
+          ),
+      ];
+    }
     for (final row in state.orderedRows.reversed) {
       if (row is ToolCallRow && row.toolName == 'TodoWrite') {
         final input = row.input ?? _ToolCallLine._tryDecode(row.inputText);
@@ -458,7 +499,7 @@ class _ConversationPageState extends State<ConversationPage> {
         if (todos is List) {
           final items = <TodoItem>[];
           for (final t in todos.whereType<Map>()) {
-            final status = t['status']?.toString() ?? 'pending';
+            final status = _normalizeTodoStatus(t['status']?.toString());
             final content = (t['activeForm'] ?? t['content'])?.toString() ?? '';
             items.add(TodoItem(content: content, status: status));
           }
@@ -469,6 +510,14 @@ class _ConversationPageState extends State<ConversationPage> {
       }
     }
     return null;
+  }
+
+  /// Snapshot `plan` uses camelCase `inProgress`; readSession/TodoWrite rows
+  /// use snake_case `in_progress` — normalize to the sheet's expected value.
+  static String _normalizeTodoStatus(String? status) {
+    if (status == null || status.isEmpty) return 'pending';
+    if (status == 'inProgress') return 'in_progress';
+    return status;
   }
 
   Widget _buildEntriesRow(ConversationState state) {
@@ -532,6 +581,29 @@ class _ConversationPageState extends State<ConversationPage> {
       isScrollControlled: true,
       builder: (sheetContext) => _TodoSheet(todos: todos),
     );
+  }
+
+  /// Fetches the session's plan history (`conversationPlansV4` — the
+  /// ExitPlanMode tool-call rows) and shows them in a sheet.
+  Future<void> _showPlansSheet() async {
+    try {
+      final plans = await widget.app
+          .fetchPlans()
+          .timeout(const Duration(seconds: 15));
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (sheetContext) => _PlansSheet(plans: plans),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('获取计划失败：$e')));
+      }
+    }
   }
 
   Future<void> _showRequestSheet(List<PendingRequest> requests) {
@@ -2355,6 +2427,195 @@ class _TodoSheet extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ---------- Plans bottom sheet ----------
+
+/// Shows the session's plan history (`conversationPlansV4`): the TodoWrite
+/// tool-call rows, newest first, each with its tool status and the todos it
+/// carried (raw JSON text).
+class _PlansSheet extends StatelessWidget {
+  final Map<String, Object?> plans;
+  const _PlansSheet({required this.plans});
+
+  /// The desktop's 计划 panel is built from the ExitPlanMode tool calls:
+  /// each carries the plan markdown (`input.plan` / `text` / `content`) and
+  /// an optional `planFilePath` — extracted here the same way the web client
+  /// does (`input` → `inputText` JSON → `output` → raw fallbacks).
+  static ({String markdown, String? planFilePath}) _extractPlan(
+    Map<String, Object?> row,
+  ) {
+    final candidates = <Object?>[
+      row['input'],
+      _tryDecodeJson(row['inputText']?.toString() ?? ''),
+      row['output'],
+    ];
+    for (final c in candidates) {
+      final plan = _planFrom(c);
+      if (plan != null) return plan;
+    }
+    return (markdown: '', planFilePath: null);
+  }
+
+  static ({String markdown, String? planFilePath})? _planFrom(Object? value) {
+    if (value is String && value.trim().isNotEmpty) {
+      return (markdown: value.trim(), planFilePath: null);
+    }
+    if (value is Map) {
+      Object? pick(String key) => value[key];
+      final markdown = [
+        pick('plan'),
+        pick('text'),
+        pick('content'),
+      ].whereType<String>().firstWhere(
+        (s) => s.trim().isNotEmpty,
+        orElse: () => '',
+      );
+      if (markdown.trim().isNotEmpty) {
+        final file = value['planFilePath'];
+        return (
+          markdown: markdown.trim(),
+          planFilePath: file is String && file.isNotEmpty ? file : null,
+        );
+      }
+    }
+    return null;
+  }
+
+  static Object? _tryDecodeJson(String raw) {
+    if (raw.trim().isEmpty) return null;
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final raw = plans['plans'];
+    final list = raw is List
+        ? raw.whereType<Map<String, Object?>>().toList()
+        : <Map<String, Object?>>[];
+    final planItems = [
+      for (final row in list)
+        if (row['toolName']?.toString() == 'ExitPlanMode' &&
+            (row['status']?.toString() == 'success' ||
+                row['status']?.toString() == 'error' ||
+                row['status']?.toString() == 'cancelled'))
+          (row: row, plan: _extractPlan(row)),
+    ].reversed.toList();
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.assignment_outlined, size: 20, color: scheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  '计划 · ${planItems.length} 条',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: planItems.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          '暂无计划',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: planItems.length,
+                      separatorBuilder: (_, _) => const Divider(height: 16),
+                      itemBuilder: (context, i) {
+                        final item = planItems[i];
+                        final markdown = item.plan.markdown;
+                        final title = _planTitle(markdown);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.assignment_outlined,
+                                  size: 16,
+                                  color: scheme.primary,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    title.isEmpty ? '计划' : title,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (item.plan.planFilePath != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  item.plan.planFilePath!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(color: scheme.tertiary),
+                                ),
+                              ),
+                            if (markdown.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: _MarkdownText(
+                                  text: markdown,
+                                  color: scheme.onSurface,
+                                ),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Title from the first `# Heading` line, else the first non-empty line
+  /// (mirrors the web client's `$ct`).
+  static String _planTitle(String markdown) {
+    final heading = RegExp(
+      r'^\s{0,3}#(?!#)\s+(.+?)\s*#*\s*$',
+      multiLine: true,
+    ).firstMatch(markdown);
+    if (heading != null) {
+      final title = heading.group(1)?.trim();
+      if (title != null && title.isNotEmpty) return title;
+    }
+    for (final line in markdown.split(RegExp(r'\r?\n'))) {
+      final trimmed = line.replaceFirst(RegExp(r'^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)'), '').trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return '';
   }
 }
 

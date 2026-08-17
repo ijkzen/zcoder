@@ -516,6 +516,15 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// Fetches the open session's plan history (TodoWrite tool-call rows via
+  /// `conversationPlansV4`) for the 计划 view.
+  Future<Map<String, Object?>> fetchPlans() async {
+    final topic = _bridge?.topicSession;
+    final sessionId = _conversation?.state?.sessionId;
+    if (topic == null || sessionId == null) throw StateError('会话未打开');
+    return topic.conversationPlans(sessionId);
+  }
+
   /// Resolves a pending request from readSession (approval or AskUserQuestion).
   /// [requestId] is the pendingPermissions[].requestId — the same id the
   /// desktop's web client passes to resolveInteraction.
