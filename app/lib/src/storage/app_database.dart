@@ -113,7 +113,7 @@ class AppDatabase {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'zcode_remote.db'),
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pairings (
@@ -146,10 +146,14 @@ class AppDatabase {
           )
         ''');
         await _createWorkspaceModelPrefs(db);
+        await _createAppSettings(db);
       },
       onUpgrade: (db, from, to) async {
         if (from < 2) {
           await _createWorkspaceModelPrefs(db);
+        }
+        if (from < 3) {
+          await _createAppSettings(db);
         }
       },
     );
@@ -165,6 +169,37 @@ class AppDatabase {
         thought_level TEXT
       )
     ''');
+  }
+
+  static Future<void> _createAppSettings(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+  }
+
+  // ---------- App settings (key-value) ----------
+
+  Future<String?> getSetting(String key) async {
+    final db = await _database;
+    final rows = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['value'] as String;
+  }
+
+  Future<void> setSetting(String key, String value) async {
+    final db = await _database;
+    await db.insert('app_settings', {
+      'key': key,
+      'value': value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   // ---------- Pairings ----------

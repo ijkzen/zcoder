@@ -10,6 +10,7 @@ import 'scan_page.dart';
 import 'workspaces_page.dart';
 import 'model_providers_page.dart';
 import 'log_page.dart';
+import 'settings_page.dart';
 
 /// Screen 1: the paired devices list. Scan a QR to add a device, tap a device
 /// to connect, long-press to rename, swipe to remove.
@@ -205,10 +206,14 @@ class _DevicesPageState extends State<DevicesPage> {
                       builder: (_) => ModelProvidersPage(app: widget.app),
                     ),
                   );
-                case 'logs':
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ProtocolLogPage()),
-                  );
+              case 'logs':
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ProtocolLogPage()),
+                );
+              case 'settings':
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SettingsPage()),
+                );
               }
             },
             itemBuilder: (context) => const [
@@ -225,6 +230,14 @@ class _DevicesPageState extends State<DevicesPage> {
                 child: ListTile(
                   leading: Icon(Icons.terminal),
                   title: Text('协议日志'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'settings',
+                child: ListTile(
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('设置'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
