@@ -218,7 +218,7 @@
 
 | ID | 前置条件 | 操作 | 预期结果 |
 |---|---|---|---|
-| TC-REQ-001 | 有 N 条待审批 | 打开 sheet | 标题「需要批准」；每条审批一页：prompt、工具名、风险等级 chip（低/中/高/严重 → 蓝/ tertiary/橙/红）、选项单选（允许一次/始终允许/拒绝/自定义） |
+| TC-REQ-001 | 有 N 条待审批 | 打开 sheet | 标题「需要批准」；每条审批一页：prompt、工具名、风险等级 chip（低/中/高/严重 → 蓝/ tertiary/橙/红）、**工具动作详情（族感知，与桌面 renderer 对齐）**、选项单选（允许一次/始终允许/拒绝/自定义）。族感知详情规则：① 执行类（Bash/execute…）= `command` 原文（标签「命令」）；② 文件改动类（Edit/Write/patch…）= `file_path`（标签「文件」）+ 行数统计（Edit 有 `old_string`/`new_string` 时显示「−N 行 +M 行」；Write 等只有 `content` 时显示「N 行」）；③ 读取类（Read/view…）= `file_path`（标签「文件」）；④ 搜索类（Grep/Glob/WebFetch/WebSearch…）= `pattern`/`query`/`url`（标签「搜索」）；⑤ 未知工具 / `mcp__*` = input 美化 JSON（标签「参数」）；⑥ 无 input 则不显示详情 |
 | TC-REQ-002 | 有待提问（AskUserQuestion） | 打开 sheet | 标题「需要你的回答」；每问一页：问题正文、「可多选/单选」标注、选项行（多选=复选框，单选=radio）、「其他回答」自定义输入框 |
 | TC-REQ-003 | 混合审批+提问 | 打开 sheet | 标题「需要处理」；水平分页，页码指示点（当前页加宽） |
 | TC-REQ-004 | 单选问题页 | 点选某选项 | 选中高亮加粗并**自动跳到下一页** |

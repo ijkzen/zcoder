@@ -8,6 +8,7 @@ PendingRequest permission({
   String toolName = 'Bash',
   String reason = '允许执行 bash 命令？',
   String riskLevel = 'medium',
+  Map<String, Object?> input = const {},
   List<PendingRequestOption> options = const [
     PendingRequestOption(optionId: 'allow_once', kind: 'allow_once', name: '允许一次'),
     PendingRequestOption(optionId: 'allow_always', kind: 'allow_always', name: '始终允许'),
@@ -20,6 +21,7 @@ PendingRequest permission({
       toolName: toolName,
       reason: reason,
       riskLevel: riskLevel,
+      input: input,
       options: options,
       requestedAt: 1,
     );
@@ -156,6 +158,121 @@ void main() {
       expect(answers, [
         {'optionId': 'allow_once'},
       ]);
+    });
+
+    testWidgets('permission page shows the Bash command being approved',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(input: {'command': 'rm -rf /tmp/x'}),
+      ]);
+
+      expect(find.text('命令'), findsOneWidget);
+      expect(find.text('rm -rf /tmp/x'), findsOneWidget);
+      // A Bash command is shown verbatim, not as JSON.
+      expect(find.textContaining('"command"'), findsNothing);
+    });
+
+    testWidgets('non-Bash permission shows the input as pretty JSON',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'Read',
+          reason: '读取文件？',
+          input: {'file_path': '/etc/hosts'},
+        ),
+      ]);
+
+      expect(find.text('文件'), findsOneWidget);
+      expect(find.text('/etc/hosts'), findsOneWidget);
+      expect(find.textContaining('"file_path"'), findsNothing);
+    });
+
+    testWidgets('Edit permission shows the file and the line-change stat',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'Edit',
+          reason: '编辑文件？',
+          input: {
+            'file_path': 'lib/foo.dart',
+            'old_string': 'line1\nline2\nline3',
+            'new_string': 'line1\nline2\nline3\nline4\nline5',
+          },
+        ),
+      ]);
+
+      expect(find.text('文件'), findsOneWidget);
+      expect(find.text('lib/foo.dart'), findsOneWidget);
+      expect(find.text('改动'), findsOneWidget);
+      expect(find.text('−3 行 +5 行'), findsOneWidget);
+    });
+
+    testWidgets('Write permission shows the file and the content size',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'Write',
+          reason: '写入文件？',
+          input: {'file_path': 'a.txt', 'content': 'x\ny\nz'},
+        ),
+      ]);
+
+      expect(find.text('a.txt'), findsOneWidget);
+      expect(find.text('内容'), findsOneWidget);
+      expect(find.text('3 行'), findsOneWidget);
+    });
+
+    testWidgets('search permission shows the term', (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'Grep',
+          reason: '搜索？',
+          input: {'pattern': 'FIXME', 'path': 'lib'},
+        ),
+      ]);
+
+      expect(find.text('搜索'), findsOneWidget);
+      expect(find.text('FIXME'), findsOneWidget);
+    });
+
+    testWidgets('unknown tool falls back to the raw input as JSON',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'SomeCustomTool',
+          reason: '执行自定义工具？',
+          input: {'arg': 'value'},
+        ),
+      ]);
+
+      expect(find.text('参数'), findsOneWidget);
+      expect(find.textContaining('"arg"'), findsOneWidget);
+      expect(find.textContaining('value'), findsOneWidget);
+    });
+
+    testWidgets('mcp tool falls back to the raw input as JSON',
+        (tester) async {
+      await pumpSheet(tester, [
+        permission(
+          toolName: 'mcp__kimi-cu__click',
+          reason: 'MCP 工具？',
+          input: {'x': 10, 'y': 20},
+        ),
+      ]);
+
+      expect(find.text('参数'), findsOneWidget);
+      expect(find.textContaining('"x"'), findsOneWidget);
+      expect(find.textContaining('"y"'), findsOneWidget);
+    });
+
+    testWidgets('permission without input shows no detail block',
+        (tester) async {
+      await pumpSheet(tester, [permission(input: const {})]);
+
+      expect(find.text('命令'), findsNothing);
+      expect(find.text('参数'), findsNothing);
+      expect(find.text('文件'), findsNothing);
+      expect(find.text('改动'), findsNothing);
     });
 
     testWidgets('cancel on a permission picks the deny option', (tester) async {

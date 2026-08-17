@@ -14,11 +14,13 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../protocol/topics/topic_models.dart';
+import 'mono_text.dart';
 
 /// One "page" of the horizontal request list.
 sealed class _SheetPage {
@@ -529,6 +531,7 @@ class _RequestSheetState extends State<RequestSheet> {
   Widget _buildPermissionPage(ColorScheme scheme, _PermissionPage page) {
     final request = page.request;
     final selectedId = _permissionSelections[request.requestId];
+    final detailSections = _permissionDetailSections(request);
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
       child: Column(
@@ -561,6 +564,13 @@ class _RequestSheetState extends State<RequestSheet> {
                 ),
               ),
             ),
+          // What the tool would do — family-aware: a shell command verbatim,
+          // a file edit as path + line-change stat, a read as its path, a
+          // search as the term, anything else as raw input JSON.
+          for (final (label, text) in detailSections) ...[
+            DetailLabel(label),
+            MonoText(text: _trimDetail(text)),
+          ],
           const SizedBox(height: 8),
           for (final option in request.options)
             _PermissionOptionTile(
@@ -666,6 +676,102 @@ class _RequestSheetState extends State<RequestSheet> {
     );
   }
 }
+
+/// Tool-name families the desktop renderer uses to pick how a permission's
+/// input is displayed (shell commands, file edits, reads, searches). The
+/// tool-name set is open — anything outside these families falls back to
+/// the raw input as JSON.
+const _shellTools = {
+  'bash', 'execute', 'run', 'exec', 'shell', 'command', 'terminal',
+};
+const _fileWriteTools = {
+  'edit', 'patch', 'replace', 'multi_edit', 'multiedit', 'write', 'create',
+  'save', 'apply_patch',
+};
+const _fileReadTools = {
+  'read', 'view', 'open', 'cat', 'head', 'tail', 'read_file',
+};
+const _searchTools = {
+  'grep', 'glob', 'fetch', 'web_fetch', 'webfetch', 'web_search',
+  'websearch', 'search', 'find', 'query', 'lookup',
+};
+
+/// The detail sections a permission page shows for the tool's action,
+/// derived from `input` the way the desktop renderer does: a shell command
+/// verbatim, a file edit as its path plus a line-change stat, a read as its
+/// path, a search as the term, and anything else (incl. `mcp__` tools) as
+/// pretty-printed JSON. Empty when the request carries no input.
+List<(String, String)> _permissionDetailSections(PendingRequest request) {
+  final input = request.input;
+  if (input.isEmpty) return const [];
+  final tool = request.toolName.toLowerCase();
+
+  if (_shellTools.contains(tool)) {
+    final command = _firstArg(input, const ['command', 'cmd', 'script']);
+    if (command != null) return [('命令', command)];
+  }
+  if (_fileWriteTools.contains(tool)) {
+    final path = _firstArg(input, const ['file_path', 'filePath', 'path', 'filename']);
+    if (path != null) {
+      final sections = <(String, String)>[('文件', path)];
+      final oldText = _firstArg(input, const [
+        'old_string', 'oldText', 'oldString', 'before',
+        'old_content', 'oldContent',
+      ]);
+      final newText = _firstArg(input, const [
+        'new_string', 'newText', 'newString', 'after',
+        'new_content', 'newContent',
+      ]);
+      if (oldText != null) {
+        // old_string matches file lines exactly, so its line count is the
+        // number of lines the edit replaces.
+        final oldLines = oldText.split('\n').length;
+        final newLines =
+            newText == null ? oldLines : newText.split('\n').length;
+        sections.add(('改动', '−$oldLines 行 +$newLines 行'));
+      } else {
+        final content = _firstArg(input, const ['content']);
+        if (content != null) {
+          sections.add(('内容', '${content.split('\n').length} 行'));
+        } else if (newText != null) {
+          sections.add(('改动', '+${newText.split('\n').length} 行'));
+        }
+      }
+      return sections;
+    }
+  }
+  if (_fileReadTools.contains(tool)) {
+    final path = _firstArg(input, const ['file_path', 'filePath', 'path', 'filename']);
+    if (path != null) return [('文件', path)];
+  }
+  if (_searchTools.contains(tool)) {
+    final term = _firstArg(input, const [
+      'pattern', 'query', 'search_query', 'searchQuery', 'url',
+    ]);
+    if (term != null) return [('搜索', term)];
+  }
+  try {
+    return [('参数', const JsonEncoder.withIndent('  ').convert(input))];
+  } catch (_) {
+    return [('参数', input.toString())];
+  }
+}
+
+/// First non-empty string under any of [keys], or null. The raw value is
+/// kept as-is (no trimming) so commands and paths display verbatim.
+String? _firstArg(Map<String, Object?> input, List<String> keys) {
+  for (final key in keys) {
+    final value = input[key];
+    if (value is String && value.trim().isNotEmpty) return value;
+  }
+  return null;
+}
+
+const _maxDetailLength = 4000;
+
+String _trimDetail(String s) => s.length > _maxDetailLength
+    ? '${s.substring(0, _maxDetailLength)}\n…（已截断）'
+    : s;
 
 class _RiskChip extends StatelessWidget {
   final String level; // low | medium | high | critical

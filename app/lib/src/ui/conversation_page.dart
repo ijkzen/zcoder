@@ -14,6 +14,7 @@ import '../protocol/services/services.dart';
 import '../protocol/topics/topic_models.dart';
 import 'request_sheet.dart';
 import 'model_config_sheet.dart';
+import 'mono_text.dart';
 import 'theme.dart';
 
 /// Screen 4: one session's conversation. Rows stream in incrementally,
@@ -1496,15 +1497,15 @@ class _ConversationPageState extends State<ConversationPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (input.isNotEmpty) ...[
-              const _DetailLabel('输入'),
-              _MonoText(text: _ToolCallLine._trim(input)),
+              const DetailLabel('输入'),
+              MonoText(text: _ToolCallLine._trim(input)),
             ],
             if (output != null && output.isNotEmpty) ...[
-              const _DetailLabel('输出'),
-              _MonoText(text: _ToolCallLine._trim(output)),
+              const DetailLabel('输出'),
+              MonoText(text: _ToolCallLine._trim(output)),
             ],
             if (row.error != null && row.error!.isNotEmpty) ...[
-              const _DetailLabel('错误'),
+              const DetailLabel('错误'),
               Text(
                 row.error!,
                 style: TextStyle(
@@ -2228,33 +2229,6 @@ class _TimelineMarkerLine extends StatelessWidget {
   }
 }
 
-class _MonoText extends StatelessWidget {
-  final String text;
-  const _MonoText({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: SelectableText(
-        text,
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 12,
-          color: scheme.onSurfaceVariant,
-          height: 1.45,
-        ),
-      ),
-    );
-  }
-}
-
 /// Modal detail view for expandable rows (thinking, tool calls). Dismisses on
 /// back / outside tap (showDialog defaults), so the list never reflows.
 class _DetailDialog extends StatelessWidget {
@@ -2276,24 +2250,6 @@ class _DetailDialog extends StatelessWidget {
           child: const Text('关闭'),
         ),
       ],
-    );
-  }
-}
-
-class _DetailLabel extends StatelessWidget {
-  final String text;
-  const _DetailLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 4),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
     );
   }
 }
