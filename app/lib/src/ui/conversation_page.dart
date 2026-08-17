@@ -286,13 +286,23 @@ class _ConversationPageState extends State<ConversationPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                Text(
-                  phase.isEmpty
-                      ? (state == null ? '连接中…' : '已连接')
-                      : SessionPhase.zh(phase),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                if (phase == 'error' && state?.lastErrorMessage != null)
+                  Text(
+                    state!.lastErrorMessage!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                else
+                  Text(
+                    phase.isEmpty
+                        ? (state == null ? '连接中…' : '已连接')
+                        : SessionPhase.zh(phase),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                 ),
               ],
             );

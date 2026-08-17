@@ -86,6 +86,18 @@ class ConversationState {
   String get phase => control['phase']?.toString() ?? '';
   bool get sessionEnded => control['sessionEnded'] as bool? ?? false;
 
+  Map<String, Object?>? get lastError {
+    final e = control['lastError'];
+    return e is Map<String, Object?> ? e : null;
+  }
+
+  String? get lastErrorMessage {
+    final e = lastError;
+    if (e == null) return null;
+    final msg = e['message']?.toString();
+    return (msg != null && msg.isNotEmpty) ? msg : null;
+  }
+
   /// Whether the agent has work in flight: the event-push snapshot's
   /// control.canStop unioned with readSession's session.status.
   bool get isAgentRunning =>
