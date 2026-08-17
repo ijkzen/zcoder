@@ -30,6 +30,14 @@ ThemeData buildTheme(Brightness brightness) {
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
     ),
+    // The M3 dialog defaults (40px side inset, 24px action padding) waste
+    // ~130dp of width on phones and cramp content; 12px matches the image
+    // preview and detail dialogs. Keyboard viewInsets are added on top of
+    // insetPadding, so inputs still clear the keyboard.
+    dialogTheme: const DialogThemeData(
+      insetPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      actionsPadding: EdgeInsets.fromLTRB(12, 4, 12, 12),
+    ),
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
   );
 }

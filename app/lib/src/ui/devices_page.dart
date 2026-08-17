@@ -73,6 +73,8 @@ class _DevicesPageState extends State<DevicesPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('粘贴远程控制链接'),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+        contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
         content: TextField(
           controller: controller,
           autofocus: true,

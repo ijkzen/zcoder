@@ -77,6 +77,8 @@ Future<bool> confirmDeleteProject(
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: const Text('删除项目'),
+      titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+      contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
       content: Text(
         '确定要删除「$label」吗？\n将删除该项目下的 $taskCount 个会话'
         '${taskCount == visibleCount ? '' : '（含已归档）'}，删除后不可恢复。'
