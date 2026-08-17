@@ -100,6 +100,40 @@ class _DevicesPageState extends State<DevicesPage> {
     await _pairFromUrl(url.trim());
   }
 
+  Future<bool> _confirm({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    bool destructive = false,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: destructive
+                ? FilledButton.styleFrom(
+                    backgroundColor:
+                        Theme.of(dialogContext).colorScheme.errorContainer,
+                    foregroundColor:
+                        Theme.of(dialogContext).colorScheme.onErrorContainer,
+                  )
+                : null,
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   Future<void> _connect(StoredPairing pairing) async {
     // Tapping the already-connected device skips the reconnect entirely.
     final isActive =
@@ -107,7 +141,13 @@ class _DevicesPageState extends State<DevicesPage> {
         widget.app.phase != BridgePhase.idle &&
         widget.app.phase != BridgePhase.failed;
     if (isActive) {
-      if (widget.app.phase == BridgePhase.ready) {
+      // `pairing` (relay paired, no workspace picked) and `ready` (bridge
+      // open) both have the project list loaded — re-enter it instead of
+      // reconnecting. Returning from the project list without picking a
+      // workspace leaves the bridge in `pairing`, so tapping must reopen
+      // the list rather than no-op.
+      if (widget.app.phase == BridgePhase.pairing ||
+          widget.app.phase == BridgePhase.ready) {
         await Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => WorkspacesPage(app: widget.app)),
         );
@@ -294,14 +334,43 @@ class _DevicesPageState extends State<DevicesPage> {
                   trailing: PopupMenuButton<String>(
                     onSelected: (v) async {
                       if (v == 'delete') {
+                        if (!await _confirm(
+                              title: '删除配对',
+                              message: '确定删除「${pairing.displayName}」的配对吗？删除后需重新扫码配对才能连接。',
+                              confirmLabel: '删除',
+                              destructive: true,
+                            )) {
+                          return;
+                        }
                         await widget.app.removePairing(pairing);
                       } else if (v == 'rename') {
                         await _rename(pairing);
+                      } else if (v == 'disconnect') {
+                        if (!await _confirm(
+                              title: '断开连接',
+                              message: '确定断开与「${pairing.displayName}」的连接吗？可随时重新点击设备恢复连接。',
+                              confirmLabel: '断开',
+                              destructive: true,
+                            )) {
+                          return;
+                        }
+                        await widget.app.disconnect();
                       }
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'rename', child: Text('重命名')),
-                      PopupMenuItem(value: 'delete', child: Text('删除配对')),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'rename',
+                        child: Text('重命名'),
+                      ),
+                      if (isActive)
+                        const PopupMenuItem(
+                          value: 'disconnect',
+                          child: Text('断开连接'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('删除配对'),
+                      ),
                     ],
                   ),
                 ),
@@ -318,7 +387,10 @@ class _DevicesPageState extends State<DevicesPage> {
       case BridgePhase.connecting:
         return '连接中…';
       case BridgePhase.pairing:
-        return '等待桌面端…';
+        // relay 已配对、项目列表已加载，只是还没开 bridge 进会话。
+        // 这个 label 用户只在从项目列表返回后看到——桌面端早已响应，
+        // 显示"已连接"才符合实际状态。
+        return '已连接';
       case BridgePhase.ready:
         return '已连接';
       case BridgePhase.reconnecting:
