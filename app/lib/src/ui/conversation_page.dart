@@ -307,20 +307,6 @@ class _ConversationPageState extends State<ConversationPage> {
             onPressed: _showTokenUsageSheet,
             icon: const Icon(Icons.data_usage),
           ),
-          // 压缩会话是会话级状态改写：从更多菜单移出为独立入口，运行中
-          // 禁用（与桌面端一致：改写会话状态需先中断）。
-          ListenableBuilder(
-            listenable: widget.app,
-            builder: (context, _) {
-              final running =
-                  widget.app.conversation?.state?.isAgentRunning ?? false;
-              return IconButton(
-                tooltip: running ? '压缩会话（运行中不可用）' : '压缩会话',
-                onPressed: running ? null : _confirmCompact,
-                icon: const Icon(Icons.compress),
-              );
-            },
-          ),
           PopupMenuButton<String>(
             tooltip: '会话菜单',
             onSelected: (value) {
@@ -788,47 +774,6 @@ class _ConversationPageState extends State<ConversationPage> {
     }
   }
 
-  Future<void> _confirmCompact() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('压缩会话'),
-        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-        contentPadding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-        content: const Text('将把此前的对话历史总结为摘要，以节省上下文空间。压缩后旧消息不再保留，此操作不可撤销。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(dialogContext).colorScheme.error,
-              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
-            ),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('压缩'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    try {
-      await widget.app.compact().timeout(const Duration(seconds: 15));
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已发送压缩请求')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('压缩失败：$e')));
-      }
-    }
-  }
-
   Future<void> _showModelConfigSheet() async {
     final state = _state;
     if (state == null) return;
@@ -855,8 +800,8 @@ class _ConversationPageState extends State<ConversationPage> {
         config.mode ??
         _prepCurrentValue(prep, const ['mode', 'collaborationMode']);
     if (!mounted) return;
-    // Session-level rewrites are refused while the agent runs (same family as
-    // compact): the sheet opens for browsing but every selection is locked.
+    // Session-level rewrites are refused while the agent runs: the sheet
+    // opens for browsing but every selection is locked.
     final running = state.isAgentRunning;
     return showModalBottomSheet<void>(
       context: context,
