@@ -29,6 +29,12 @@ class _ScanPageState extends State<ScanPage>
   bool _invalidHint = false;
   Timer? _invalidHintTimer;
 
+  /// Whether a resume is pending because the controller was still starting
+  /// when the app returned to the foreground. The retry fires once the
+  /// in-flight [MobileScannerController.start] settles (see the listener
+  /// attached in [initState]).
+  bool _resumePending = false;
+
   static const _wechatGreen = Color(0xFF07C160);
 
   @override
@@ -42,6 +48,12 @@ class _ScanPageState extends State<ScanPage>
       vsync: this,
       duration: const Duration(milliseconds: 2400),
     )..repeat(reverse: true);
+
+    // The controller's value changes whenever start() settles — whether it
+    // succeeded (isRunning = true) or failed (isRunning = false, isStarting =
+    // false). If a resume arrived while start() was in flight, we retry now
+    // that the controller is free and we can observe whether it is running.
+    _controller.addListener(_onControllerChanged);
   }
 
   @override
@@ -51,10 +63,21 @@ class _ScanPageState extends State<ScanPage>
       unawaited(_controller.toggleTorch());
     }
     WidgetsBinding.instance.removeObserver(this);
+    _controller.removeListener(_onControllerChanged);
     _invalidHintTimer?.cancel();
     _lineController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (!_resumePending || !mounted) return;
+    // Wait for the in-flight start to finish before retrying.
+    if (_controller.value.isStarting) return;
+    _resumePending = false;
+    if (!_controller.value.isRunning) {
+      unawaited(_controller.start());
+    }
   }
 
   @override
@@ -66,10 +89,22 @@ class _ScanPageState extends State<ScanPage>
     //    (it wasn't — permission hadn't been granted yet), so nobody restarts it.
     // 2. Returning from system settings after manually granting permission.
     // 3. Any other lifecycle-related camera stop (e.g. picture-in-picture).
+    //
+    // A race exists on the first-time grant: when the user approves the
+    // permission, the Activity resumes while the original start() is still
+    // awaiting the native camera (isStarting = true). Calling start() again at
+    // that moment throws controllerInitializing, which unawaited swallows —
+    // and if the original start() then fails (the native side was disrupted by
+    // the pause), nobody restarts the camera. We defer the retry until the
+    // in-flight start settles, via _resumePending and _onControllerChanged.
     if (state != AppLifecycleState.resumed) return;
-    if (mounted && !_controller.value.isRunning) {
-      unawaited(_controller.start());
+    if (!mounted) return;
+    if (_controller.value.isRunning) return;
+    if (_controller.value.isStarting) {
+      _resumePending = true;
+      return;
     }
+    unawaited(_controller.start());
   }
 
   void _onDetect(BarcodeCapture capture) {
