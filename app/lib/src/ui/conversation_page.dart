@@ -498,14 +498,9 @@ class _ConversationPageState extends State<ConversationPage> {
                         // Rests at the bottom edge; moves up to sit above the
                         // back-to-bottom button when that one is visible.
                         bottom: _atBottom ? 14 : 14 + 40 + 10,
-                        child: Badge.count(
-                          count: todos.length,
-                          child: FloatingActionButton.small(
-                            heroTag: 'todo-fab',
-                            tooltip: '查看待办',
-                            onPressed: () => _showTodoSheet(todos),
-                            child: const Icon(Icons.checklist),
-                          ),
+                        child: _TodoFab(
+                          todos: todos,
+                          onTap: () => _showTodoSheet(todos),
                         ),
                       ),
                     if (!_atBottom)
@@ -2653,6 +2648,33 @@ class _EntryChip extends StatelessWidget {
           visualDensity: VisualDensity.compact,
           icon: Icon(icon, size: 20),
         ),
+      ),
+    );
+  }
+}
+
+/// Floating checklist button with a corner badge. Red badge shows how many
+/// todos are unfinished (black label); green badge shows the total todo count
+/// once every todo is completed (white label).
+class _TodoFab extends StatelessWidget {
+  final List<TodoItem> todos;
+  final VoidCallback onTap;
+  const _TodoFab({required this.todos, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final unfinished = todos.where((t) => t.status != 'completed').length;
+    final allDone = unfinished == 0;
+    return Badge.count(
+      count: allDone ? todos.length : unfinished,
+      backgroundColor:
+          allDone ? Colors.green.shade600 : Colors.red.shade600,
+      textColor: allDone ? Colors.white : Colors.black,
+      child: FloatingActionButton.small(
+        heroTag: 'todo-fab',
+        tooltip: '查看待办',
+        onPressed: onTap,
+        child: const Icon(Icons.checklist),
       ),
     );
   }
