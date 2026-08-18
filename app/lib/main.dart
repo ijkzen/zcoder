@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/app_controller.dart';
+import 'src/protocol/zlog.dart';
 import 'src/services/notifications.dart';
 import 'src/services/update_checker.dart';
 import 'src/storage/app_database.dart';
@@ -39,7 +40,18 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
     // Notification tap while the app is running: navigate immediately when a
     // connection is up; otherwise the link stays pending for the next connect.
     _deepLinkSub = widget.app.deepLinkStream.listen((raw) {
+      zlog('[main] deepLinkStream 收到：$raw');
       unawaited(handleDeepLink(widget.app, raw));
+    });
+    // A tap that happened while the process was alive but the Activity was
+    // recreated afterwards (cold-ish resume) loses the broadcast above; the
+    // pending link survives on the controller and must be consumed here.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = widget.app.pendingDeepLink;
+      if (pending != null) {
+        zlog('[main] 启动时发现未消费的链接：$pending');
+        unawaited(handleDeepLink(widget.app, pending));
+      }
     });
     // Silent update check on startup: shows a SnackBar only if a newer
     // version exists; failures are swallowed so the user is never bothered.
