@@ -1618,8 +1618,15 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
   }
 }
 
-/// Desktop-style running-turn status: "工作中 12 分 11 秒". Ticks once a
-/// second — the row stream alone only refreshes on poll/delta events.
+/// Desktop-style running-turn status. "工作中" sits left-aligned with a
+/// scanning glow — a primary-colored band sweeps across those three
+/// characters and back, brightening each one as it passes — while the elapsed
+/// time is right-aligned and static. Ticks once a second — the row stream
+/// alone only refreshes on poll/delta events.
+///
+/// The glow is done with per-character color interpolation rather than a
+/// ShaderMask so the sweep composites reliably on all GPUs (emulators
+/// rasterize mask layers unreliably); the result looks the same.
 class _TurnStatusLine extends StatefulWidget {
   final int? startedAt;
   const _TurnStatusLine({super.key, required this.startedAt});
@@ -1628,8 +1635,14 @@ class _TurnStatusLine extends StatefulWidget {
   State<_TurnStatusLine> createState() => _TurnStatusLineState();
 }
 
-class _TurnStatusLineState extends State<_TurnStatusLine> {
+class _TurnStatusLineState extends State<_TurnStatusLine>
+    with SingleTickerProviderStateMixin {
   Timer? _ticker;
+  late final AnimationController _sweep;
+
+  // Half-width of the glow band in "工作中" width fractions. Kept small so
+  // the sweep lights up roughly one character at a time.
+  static const double _bandHalf = 0.18;
 
   @override
   void initState() {
@@ -1637,12 +1650,59 @@ class _TurnStatusLineState extends State<_TurnStatusLine> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
+    _sweep = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _sweep.dispose();
     super.dispose();
+  }
+
+  /// [text] ("工作中") with a glow band centered at [center·width]·[0..1]:
+  /// each glyph interpolates base gray → theme primary based on how its center
+  /// sits inside the band, so the characters light up as the sweep passes.
+  Widget _glowLabel(BuildContext context, String text, double center) {
+    final scheme = Theme.of(context).colorScheme;
+    final base = (Theme.of(context).textTheme.labelMedium ??
+            const TextStyle(fontSize: 12))
+        .copyWith(color: scheme.onSurfaceVariant);
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: base),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final centers = <double>[];
+    for (var i = 0; i < text.length; i++) {
+      final boxes = tp.getBoxesForSelection(
+        TextSelection(baseOffset: i, extentOffset: i + 1),
+      );
+      if (boxes.isEmpty) continue;
+      final box = boxes.first;
+      centers.add(box.left + (box.right - box.left) / 2);
+    }
+    final band = _bandHalf * tp.width;
+    final cx = center * tp.width;
+    Color colorFor(double pc) {
+      final d = (pc - cx).abs() / band;
+      final f = (1.0 - d).clamp(0.0, 1.0);
+      return Color.lerp(scheme.onSurfaceVariant, scheme.primary, f * f)!;
+    }
+
+    final spans = <TextSpan>[];
+    var gi = 0;
+    for (var i = 0; i < text.length && gi < centers.length; i++) {
+      spans.add(
+        TextSpan(
+          text: text[i],
+          style: base.copyWith(color: colorFor(centers[gi++])),
+        ),
+      );
+    }
+    return Text.rich(TextSpan(children: spans), style: base, maxLines: 1);
   }
 
   @override
@@ -1652,27 +1712,28 @@ class _TurnStatusLineState extends State<_TurnStatusLine> {
     final elapsed = startedAt == null
         ? null
         : DateTime.now().millisecondsSinceEpoch - startedAt;
+    final style = Theme.of(
+      context,
+    ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          SizedBox(
-            width: 13,
-            height: 13,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: scheme.primary,
-            ),
+          AnimatedBuilder(
+            animation: _sweep,
+            builder: (_, _) {
+              // Band center walks across "工作中" and back; the curve softens
+              // the turnaround so the sweep feels like breathing.
+              final center = Curves.easeInOutSine
+                  .transform(_sweep.value)
+                  .clamp(_bandHalf, 1 - _bandHalf)
+                  .toDouble();
+              return _glowLabel(context, '工作中', center);
+            },
           ),
-          const SizedBox(width: 8),
-          Text(
-            elapsed == null || elapsed < 0
-                ? '工作中'
-                : '工作中 ${_formatDuration(elapsed)}',
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
-          ),
+          if (elapsed != null && elapsed >= 0)
+            Text(_formatDuration(elapsed), style: style),
         ],
       ),
     );
