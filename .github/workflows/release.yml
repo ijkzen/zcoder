@@ -56,15 +56,15 @@ jobs:
           OUT_DIR="build/app/outputs/flutter-apk"
 
           # Build arm64 only
-          flutter build apk --release --target-platform android-arm64 -PabiFilter=arm64-v8a
+          flutter build apk --release --target-platform android-arm64 -PabiFilter=arm64-v8a --dart-define=ZREMOTE_LOG=true
           mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-arm64-v8a-${TAG}.apk"
 
           # Build armv7 only
-          flutter build apk --release --target-platform android-arm -PabiFilter=armeabi-v7a
+          flutter build apk --release --target-platform android-arm -PabiFilter=armeabi-v7a --dart-define=ZREMOTE_LOG=true
           mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-armv7-${TAG}.apk"
 
           # Build universal (all ABIs)
-          flutter build apk --release
+          flutter build apk --release --dart-define=ZREMOTE_LOG=true
           mv "$OUT_DIR/app-release.apk" "$OUT_DIR/zcode_remote-universal-${TAG}.apk"
 
           echo "=== Built APKs ==="
