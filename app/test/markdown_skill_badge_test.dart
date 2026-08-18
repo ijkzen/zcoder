@@ -34,6 +34,56 @@ List<String> badgeNames(String source) {
   return names;
 }
 
+/// Parses [source] with the chat (skill + slash) badge extension set and
+/// returns the names of every `slashBadge` element in document order.
+List<String> slashNames(String source) {
+  final doc = md.Document(extensionSet: chatBadgeExtensionSet);
+  final nodes = doc.parseLines(const LineSplitter().convert(source));
+  final names = <String>[];
+  void walk(md.Node node) {
+    if (node is md.Element) {
+      if (node.tag == 'slashBadge') {
+        names.add(
+          node.children
+              ?.whereType<md.Text>()
+              .map((t) => t.text)
+              .join()
+              .trim() ??
+              '',
+        );
+      }
+      for (final c in node.children ?? const <md.Node>[]) {
+        walk(c);
+      }
+    }
+  }
+
+  for (final n in nodes) {
+    walk(n);
+  }
+  return names;
+}
+
+/// All inline element tags of [source] parsed with [chatBadgeExtensionSet].
+List<String> tags(String source) {
+  final doc = md.Document(extensionSet: chatBadgeExtensionSet);
+  final nodes = doc.parseLines(const LineSplitter().convert(source));
+  final tags = <String>[];
+  void walk(md.Node node) {
+    if (node is md.Element) {
+      tags.add(node.tag);
+      for (final c in node.children ?? const <md.Node>[]) {
+        walk(c);
+      }
+    }
+  }
+
+  for (final n in nodes) {
+    walk(n);
+  }
+  return tags;
+}
+
 void main() {
   group('SkillInvokeSyntax', () {
     test(r'leading $skill-name', () {
@@ -93,6 +143,60 @@ void main() {
       expect(hasSkillInvoke('plain text'), isFalse);
       expect(hasSkillInvoke(r'价格 $100 元'), isFalse);
       expect(hasSkillInvoke(r'$'), isFalse);
+    });
+  });
+
+  group('SlashInvokeSyntax', () {
+    test('leading slash command', () {
+      expect(
+        slashNames('/flutter_project_upgrade 升级项目'),
+        ['flutter_project_upgrade'],
+      );
+    });
+
+    test('nested command via colon + hyphenated name', () {
+      expect(
+        slashNames(r'用 /zcode-guide:diagnosing-commands 排查'),
+        ['zcode-guide:diagnosing-commands'],
+      );
+    });
+
+    test('multiple slash commands each become a badge', () {
+      expect(slashNames('/a /b 开工'), ['a', 'b']);
+    });
+
+    test('URL slash is not a command (lookbehind + autolink)', () {
+      expect(
+        slashNames(r'请看 https://github.com/ijkzen/zcoder'),
+        isEmpty,
+      );
+    });
+
+    test('path segment slash is not a command', () {
+      expect(slashNames(r'打开 a/b/c 目录'), isEmpty);
+    });
+
+    test('coexists with skill badges in the chat set', () {
+      final all = tags(r'$skill /cmd 一起');
+      expect(all, contains('skillBadge'));
+      expect(all, contains('slashBadge'));
+    });
+
+    test('inside fenced code is left as text', () {
+      expect(slashNames('```bash\nrun /test\n```'), isEmpty);
+    });
+  });
+
+  group('hasSlashInvoke', () {
+    test(r'true for /command tokens', () {
+      expect(hasSlashInvoke(r'/flutter_project_upgrade x'), isTrue);
+      expect(hasSlashInvoke(r'运行 /zcode-guide:diagnosing-commands'), isTrue);
+    });
+
+    test('false for URLs, paths and plain text', () {
+      expect(hasSlashInvoke(r'https://github.com/x'), isFalse);
+      expect(hasSlashInvoke(r'打开 a/b/c'), isFalse);
+      expect(hasSlashInvoke('plain text'), isFalse);
     });
   });
 }

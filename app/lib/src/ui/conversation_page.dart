@@ -1446,7 +1446,7 @@ class _UserBubble extends StatelessWidget {
                 if (text.isNotEmpty) const SizedBox(height: 6),
               ],
               if (text.isNotEmpty)
-                hasSkillInvoke(text)
+                (hasSkillInvoke(text) || hasSlashInvoke(text))
                     ? MarkdownBody(
                         data: text,
                         selectable: true,
@@ -1454,8 +1454,11 @@ class _UserBubble extends StatelessWidget {
                           context,
                           scheme.onPrimaryContainer,
                         ),
-                        extensionSet: skillBadgeExtensionSet,
-                        builders: {'skillBadge': SkillBadgeBuilder()},
+                        extensionSet: chatBadgeExtensionSet,
+                        builders: {
+                          'skillBadge': SkillBadgeBuilder(),
+                          'slashBadge': SlashBadgeBuilder(),
+                        },
                       )
                     : SelectableText(
                         text,
