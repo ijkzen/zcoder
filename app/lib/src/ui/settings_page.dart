@@ -22,7 +22,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   UpdateChannel _channel = UpdateChannel.stable;
-  UpdateMirror _mirror = UpdateMirror.official;
+  UpdateMirror _mirror = UpdateMirror.auto;
   bool _loading = false;
   bool _checking = false;
   String? _checkError;
@@ -178,15 +178,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 onChanged: (v) {
                   if (v != null) _changeMirror(v);
                 },
-                items: const [
-                  DropdownMenuItem(
-                    value: UpdateMirror.official,
-                    child: Text('官方直连'),
-                  ),
-                  DropdownMenuItem(
-                    value: UpdateMirror.ghproxy,
-                    child: Text('GH Proxy'),
-                  ),
+                items: [
+                  for (final m in UpdateMirror.values)
+                    DropdownMenuItem(value: m, child: Text(m.displayName)),
                 ],
               ),
             ),
@@ -347,6 +341,9 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
   bool _installing = false;
   String? _error;
 
+  /// The accelerator (or 官方直连) the current attempt is downloading from.
+  String? _source;
+
   @override
   void initState() {
     super.initState();
@@ -372,6 +369,9 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
               _received = (p * widget.info.asset.size).round();
             });
           }
+        },
+        onSource: (source) {
+          if (mounted) setState(() => _source = source);
         },
       );
 
@@ -401,6 +401,16 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
     }
   }
 
+  void _retry() {
+    setState(() {
+      _error = null;
+      _progress = 0;
+      _received = 0;
+      _source = null;
+    });
+    _startDownload();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -413,9 +423,18 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
           if (_error != null) ...[
             Text(_error!, style: TextStyle(color: scheme.error)),
             const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('关闭'),
+            Row(
+              children: [
+                FilledButton(
+                  onPressed: _retry,
+                  child: const Text('重试'),
+                ),
+                const SizedBox(width: 12),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('关闭'),
+                ),
+              ],
             ),
           ] else if (_installing) ...[
             const Text('已下载完成，请在系统弹窗中完成安装。'),
@@ -428,6 +447,15 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
             Text(
               '${widget.info.displayVersion} · ${widget.info.asset.name}',
             ),
+            if (_source != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                '下载来源：$_source',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
             const SizedBox(height: 16),
             LinearProgressIndicator(value: _progress),
             const SizedBox(height: 8),

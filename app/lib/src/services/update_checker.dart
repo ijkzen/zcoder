@@ -2,8 +2,8 @@
 /// the APK (optionally via an acceleration proxy), and hands off to the
 /// system installer.
 ///
-/// The GitHub Releases API (api.github.com) is always called directly —
-/// ghproxy.net only accelerates github.com file downloads, not the API.
+/// The GitHub Releases API (api.github.com) is always called directly — the
+/// accelerators below only proxy github.com file downloads, not the API.
 library;
 
 import 'dart:convert';
@@ -33,23 +33,67 @@ enum UpdateChannel {
   };
 }
 
-/// Download mirror for the APK file.
+/// Download source for the APK file: an accelerator (prefix-rewrite GitHub
+/// proxy) or direct download.
 enum UpdateMirror {
   /// Direct download from github.com.
-  official,
+  official('official', '官方直连', null),
 
-  /// Prefix the URL with ghproxy.net for faster downloads in China.
-  ghproxy;
+  /// Try every [accelerators] member in order, then fall back to the
+  /// official direct download when all of them fail. Recommended default.
+  auto('auto', '自动切换（推荐）', null),
 
-  String get label => switch (this) {
-    official => 'official',
-    ghproxy => 'ghproxy',
-  };
+  /// gh-proxy.com — Cloudflare Worker, multiple edge nodes.
+  ghProxyCom('ghProxyCom', 'gh-proxy.com', 'https://gh-proxy.com/'),
 
-  static UpdateMirror fromLabel(String? label) => switch (label) {
-    'ghproxy' => ghproxy,
-    _ => official,
-  };
+  /// ghfast.top — mainland-China popular mirror.
+  ghFast('ghFast', 'ghfast.top', 'https://ghfast.top/'),
+
+  /// ghproxy.cn — supports releases + codeload + API (GET only; HEAD → 405).
+  ghProxyCn('ghProxyCn', 'ghproxy.cn', 'https://ghproxy.cn/'),
+
+  /// gh-proxy.org — broadest URL coverage (releases + codeload + API + raw).
+  ghProxyOrg('ghProxyOrg', 'gh-proxy.org', 'https://gh-proxy.org/'),
+
+  /// gh.ddlc.top — Cloudflare Worker (hunshcn/gh-proxy).
+  ghDdlc('ghDdlc', 'gh.ddlc.top', 'https://gh.ddlc.top/'),
+
+  /// ghproxy.xyz — CDN backed.
+  ghProxyXyz('ghProxyXyz', 'ghproxy.xyz', 'https://ghproxy.xyz/');
+
+  /// Persisted key (the `update_mirror` app setting).
+  final String label;
+
+  /// Menu label shown in settings.
+  final String displayName;
+
+  /// Prefix-rewrite base (`$prefix<original github url>`); null for
+  /// [official] and [auto], which have no single fixed URL.
+  final String? prefix;
+
+  const UpdateMirror(this.label, this.displayName, this.prefix);
+
+  /// The accelerators tried by [UpdateMirror.auto], in order.
+  static const List<UpdateMirror> accelerators = [
+    UpdateMirror.ghProxyCom,
+    UpdateMirror.ghFast,
+    UpdateMirror.ghProxyCn,
+    UpdateMirror.ghProxyOrg,
+    UpdateMirror.ghDdlc,
+    UpdateMirror.ghProxyXyz,
+  ];
+
+  bool get isAccelerator => this != official && this != auto;
+
+  static UpdateMirror fromLabel(String? label) {
+    // `ghproxy` is the legacy value persisted by older builds — route it to
+    // the auto chain instead of the retired built-in single mirror.
+    if (label == 'ghproxy') return UpdateMirror.auto;
+    for (final m in UpdateMirror.values) {
+      if (m.label == label) return m;
+    }
+    return UpdateMirror.auto;
+  }
 }
 
 /// A downloadable asset attached to a GitHub release.
@@ -159,7 +203,6 @@ class UpdateChecker {
   final String currentVersion;
 
   static const _apiBase = 'https://api.github.com';
-  static const _ghproxyPrefix = 'https://ghproxy.net/';
 
   /// Method channel for reading the device's supported ABIs.
   static const _platform = MethodChannel('dev.ijkzen.zcode_remote/device_info');
@@ -169,7 +212,8 @@ class UpdateChecker {
   ///
   /// [channel] controls whether prereleases are included.
   /// [mirror] is only used later for download URL construction; the API
-  /// call itself is always direct (ghproxy does not proxy api.github.com).
+  /// call itself is always direct (the accelerators only proxy file
+  /// downloads, not api.github.com).
   Future<UpdateInfo?> checkForUpdate({
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
@@ -326,65 +370,109 @@ class UpdateChecker {
     return ['arm64-v8a'];
   }
 
+  /// How long to wait for the first byte (DNS/connect/headers) before a
+  /// candidate is abandoned — a dead or geo-blocked mirror must never hang
+  /// the update dialog.
+  static const _firstByteTimeout = Duration(seconds: 25);
+
+  /// No new bytes for this long mid-download aborts the attempt so the
+  /// caller can switch to the next candidate (a slow-but-alive mirror).
+  static const _progressTimeout = Duration(seconds: 15);
+
   /// Downloads the APK to a temporary file, reporting progress via [onProgress]
-  /// (0.0–1.0). Returns the path to the downloaded file.
+  /// (0.0–1.0) and the source actually being used via [onSource].
   ///
-  /// [mirror] controls whether the download URL is proxied through ghproxy.net.
+  /// [mirror] controls the download source: [UpdateMirror.official] downloads
+  /// directly; [UpdateMirror.auto] tries every accelerator in order then falls
+  /// back to the official URL; a specific accelerator tries that mirror then
+  /// the official URL. A stalled candidate (no first byte, or no progress for
+  /// a while) is abandoned in favor of the next one.
+  ///
+  /// Returns the path to the downloaded file.
   Future<String> downloadApk(
     AssetInfo asset, {
     UpdateMirror mirror = UpdateMirror.official,
     void Function(double progress)? onProgress,
+    void Function(String source)? onSource,
   }) async {
-    final url = _applyMirror(asset.downloadUrl, mirror);
-    debugPrint('[UpdateChecker] Downloading $url');
-
-    final request = http.Request('GET', Uri.parse(url));
-    final client = http.Client();
-    final response = await client.send(request);
-
-    if (response.statusCode != 200) {
-      client.close();
-      throw UpdateCheckException(
-        '下载失败: HTTP ${response.statusCode} ${response.reasonPhrase}',
-      );
-    }
-
-    final total = response.contentLength ?? asset.size;
     final dir = await getTemporaryDirectory();
-    final filePath = '${dir.path}/${asset.name}';
-    final file = File(filePath);
-    final sink = file.openWrite();
-
-    int received = 0;
-    try {
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        received += chunk.length;
-        if (total > 0) {
-          onProgress?.call(received / total);
-        }
+    final file = File('${dir.path}/${asset.name}');
+    Object? lastError;
+    for (final (:url, :name) in candidateUrls(asset.downloadUrl, mirror)) {
+      try {
+        return await _downloadFrom(url, name, asset, file, onProgress, onSource);
+      } catch (e) {
+        debugPrint('[UpdateChecker] $name 失败: $e');
+        // Truncate/remove any partial bytes; the next attempt rewrites it.
+        try {
+          await file.delete();
+        } catch (_) {}
+        lastError = e;
       }
-      await sink.flush();
-    } catch (e) {
-      await sink.close();
-      client.close();
-      await file.delete();
-      rethrow;
-    } finally {
-      await sink.close();
-      client.close();
     }
-
-    debugPrint('[UpdateChecker] Downloaded to $filePath ($received bytes)');
-    return filePath;
+    if (lastError is UpdateCheckException) throw lastError;
+    throw UpdateCheckException('下载失败: $lastError');
   }
 
-  /// Prefixes the download URL with the ghproxy prefix when needed.
-  String _applyMirror(String url, UpdateMirror mirror) {
-    if (mirror == UpdateMirror.ghproxy && !url.startsWith(_ghproxyPrefix)) {
-      return '$_ghproxyPrefix$url';
+  /// The download URLs to try for [mirror], in order, paired with the source
+  /// name to show (null name = official direct download). Public so the UI
+  /// can preview what will be tried.
+  List<({String url, String? name})> candidateUrls(
+    String downloadUrl,
+    UpdateMirror mirror,
+  ) {
+    if (mirror == UpdateMirror.official) {
+      return [(url: downloadUrl, name: null)];
     }
-    return url;
+    final selected = mirror == UpdateMirror.auto
+        ? UpdateMirror.accelerators
+        : [mirror];
+    return [
+      for (final m in selected)
+        (url: '${m.prefix}$downloadUrl', name: m.displayName),
+      // Official direct download as the last-resort fallback.
+      (url: downloadUrl, name: null),
+    ];
+  }
+
+  /// Streams one candidate into [file]; returns the file path on success and
+  /// throws on failure (timeout, non-200, or I/O error).
+  Future<String> _downloadFrom(
+    String url,
+    String? name,
+    AssetInfo asset,
+    File file,
+    void Function(double progress)? onProgress,
+    void Function(String source)? onSource,
+  ) async {
+    final label = '通过 ${name ?? '官方直连'} ';
+    onSource?.call(name ?? '官方直连');
+    debugPrint('[UpdateChecker] 开始$label下载 $url');
+    final request = http.Request('GET', Uri.parse(url));
+    final client = http.Client();
+    try {
+      final response = await client.send(request).timeout(_firstByteTimeout);
+      if (response.statusCode != 200) {
+        throw UpdateCheckException('$label下载失败: HTTP ${response.statusCode}');
+      }
+      final total = response.contentLength ?? asset.size;
+      final sink = file.openWrite();
+      int received = 0;
+      try {
+        await for (final chunk in response.stream.timeout(_progressTimeout)) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (total > 0) onProgress?.call(received / total);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+      debugPrint('[UpdateChecker] $label下载完成 ($received bytes)');
+      return file.path;
+    } finally {
+      client.close();
+    }
   }
 
   DateTime _parseDate(dynamic release) {

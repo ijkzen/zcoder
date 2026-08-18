@@ -41,7 +41,55 @@ void main() {
       for (final m in UpdateMirror.values) {
         expect(UpdateMirror.fromLabel(m.label), m);
       }
-      expect(UpdateMirror.fromLabel(null), UpdateMirror.official);
+      expect(UpdateMirror.fromLabel(null), UpdateMirror.auto);
+    });
+
+    test('legacy ghproxy label routes to auto chain', () {
+      expect(UpdateMirror.fromLabel('ghproxy'), UpdateMirror.auto);
+    });
+
+    test('accelerators list excludes direct/auto sentinels', () {
+      expect(
+        UpdateMirror.accelerators.every((m) => m.isAccelerator),
+        isTrue,
+      );
+      expect(UpdateMirror.accelerators, isNotEmpty);
+    });
+  });
+
+  group('UpdateChecker.candidateUrls', () {
+    final url =
+        'https://github.com/ijkzen/zcoder/releases/download/v1.0.0/a.apk';
+    UpdateChecker checker() => UpdateChecker(
+          owner: 'ijkzen',
+          repo: 'zcoder',
+          currentVersion: '1.0.0',
+        );
+
+    test('official returns only the direct URL', () {
+      final urls = checker().candidateUrls(url, UpdateMirror.official);
+      expect(urls.length, 1);
+      expect(urls.single.url, url);
+      expect(urls.single.name, isNull);
+    });
+
+    test('auto tries every accelerator then official', () {
+      final urls = checker().candidateUrls(url, UpdateMirror.auto);
+      expect(urls.length, UpdateMirror.accelerators.length + 1);
+      for (final accel in UpdateMirror.accelerators) {
+        expect(urls.map((u) => u.url), contains('${accel.prefix}$url'));
+      }
+      expect(urls.last.url, url);
+      expect(urls.last.name, isNull);
+    });
+
+    test('a specific mirror tries only that one then official', () {
+      final urls = checker().candidateUrls(url, UpdateMirror.ghProxyCn);
+      expect(urls.length, 2);
+      expect(urls[0].url, 'https://ghproxy.cn/$url');
+      expect(urls[0].name, 'ghproxy.cn');
+      expect(urls[1].url, url);
+      expect(urls[1].name, isNull);
     });
   });
 
