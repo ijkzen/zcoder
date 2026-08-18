@@ -1,7 +1,7 @@
 name: zcode_remote
 description: 用 Flutter 重写的 ZCode 远程控制客户端（替代 Web 远控页面）。
 publish_to: 'none'
-version: 0.4.8+15
+version: 0.4.9+16
 
 environment:
   sdk: ^3.10.0
