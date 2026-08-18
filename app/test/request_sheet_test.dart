@@ -430,6 +430,46 @@ void main() {
       expect(find.text('提交'), findsOneWidget);
     });
 
+    testWidgets('ExitPlanMode submits accept without filling anything',
+        (tester) async {
+      final answers = await pumpSheet(tester, [
+        PendingRequest(
+          requestId: 'perm_plan',
+          toolName: 'ExitPlanMode',
+          reason: '计划审批',
+          input: {'interaction': 'plan_approval', 'plan': '重构模块 A'},
+        ),
+      ]);
+
+      expect(find.text('重构模块 A'), findsOneWidget);
+      await tester.tap(find.text('提交'));
+      await tester.pumpAndSettle();
+
+      expect(answers, [
+        {'action': 'accept'},
+      ]);
+    });
+
+    testWidgets('ExitPlanMode keeps a cancel button that declines',
+        (tester) async {
+      final answers = await pumpSheet(tester, [
+        PendingRequest(
+          requestId: 'perm_plan',
+          toolName: 'ExitPlanMode',
+          reason: '计划审批',
+          input: {'interaction': 'plan_approval', 'plan': '重构模块 A'},
+        ),
+      ]);
+
+      expect(find.text('取消'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(answers, [
+        {'action': 'decline'},
+      ]);
+    });
+
     testWidgets('submit with unanswered pages jumps to the first gap',
         (tester) async {
       final answers = <Map<String, Object?>>[];

@@ -174,6 +174,10 @@ class _RequestSheetState extends State<RequestSheet> {
       case _PermissionPage(:final request):
         return _permissionSelections[request.requestId] != null;
       case _FreeTextPage(:final request):
+        // ExitPlanMode is answered by the submit button itself: the plan
+        // text it shows is the thing being approved, so there is nothing to
+        // fill in and no option to select.
+        if (request.isExitPlanMode) return true;
         final simple = _simpleOptionSelections[request.requestId];
         if (simple != null) return true;
         return request.isFreeTextInput &&
@@ -243,12 +247,10 @@ class _RequestSheetState extends State<RequestSheet> {
         return {'optionId': optionId};
       case _FreeTextPage(:final request):
         // ExitPlanMode (plan_approval) is an elicitation — the desktop
-        // resolves it with {action: "accept"}, not {optionId}.
-        if (request.isExitPlanMode) {
-          final selected = _simpleOptionSelections[request.requestId];
-          if (selected != null) return {'action': 'accept'};
-          return null;
-        }
+        // resolves it with {action: "accept"}, not {optionId}. The plan
+        // content is the page itself, so submitting approves it whether or
+        // not a simple option was tapped.
+        if (request.isExitPlanMode) return {'action': 'accept'};
         final simple = _simpleOptionSelections[request.requestId];
         if (simple != null) return {'optionId': simple};
         final text = _freeTextController(request.requestId).text.trim();
@@ -448,8 +450,13 @@ class _RequestSheetState extends State<RequestSheet> {
                         child: const Text('提交'),
                       ),
                       // Free-text pages have no cancel path (desktop parity);
-                      // closing the sheet leaves them pending.
-                      if (_pages[_page] is! _FreeTextPage) ...[
+                      // closing the sheet leaves them pending. ExitPlanMode is
+                      // an elicitation with a decline path, so it keeps the
+                      // cancel button.
+                      if (_pages[_page] is! _FreeTextPage ||
+                          (_pages[_page] as _FreeTextPage)
+                              .request
+                              .isExitPlanMode) ...[
                         const SizedBox(width: 8),
                         TextButton(
                           onPressed: _submitting ? null : _cancel,
