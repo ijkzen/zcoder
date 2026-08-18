@@ -91,6 +91,16 @@ void main() {
       expect(urls[1].url, url);
       expect(urls[1].name, isNull);
     });
+
+    test('ghp.ijkzen.cn 自建加速源优先于公共镜像', () {
+      expect(UpdateMirror.accelerators.first, UpdateMirror.ghpIjkzen);
+      expect(UpdateMirror.ghpIjkzen.prefix, 'https://ghp.ijkzen.cn/');
+      final urls = checker().candidateUrls(url, UpdateMirror.ghpIjkzen);
+      expect(urls[0].url, 'https://ghp.ijkzen.cn/$url');
+      expect(urls[0].name, 'ghp.ijkzen.cn');
+      expect(urls[1].url, url);
+      expect(urls[1].name, isNull);
+    });
   });
 
   group('UpdateChecker.checkForUpdate', () {

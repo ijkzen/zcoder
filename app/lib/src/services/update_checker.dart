@@ -43,6 +43,9 @@ enum UpdateMirror {
   /// official direct download when all of them fail. Recommended default.
   auto('auto', '自动切换（推荐）', null),
 
+  /// ghp.ijkzen.cn — 自建 GitHub 文件下载加速镜像，auto 链中优先尝试。
+  ghpIjkzen('ghpIjkzen', 'ghp.ijkzen.cn', 'https://ghp.ijkzen.cn/'),
+
   /// gh-proxy.com — Cloudflare Worker, multiple edge nodes.
   ghProxyCom('ghProxyCom', 'gh-proxy.com', 'https://gh-proxy.com/'),
 
@@ -75,6 +78,7 @@ enum UpdateMirror {
 
   /// The accelerators tried by [UpdateMirror.auto], in order.
   static const List<UpdateMirror> accelerators = [
+    UpdateMirror.ghpIjkzen,
     UpdateMirror.ghProxyCom,
     UpdateMirror.ghFast,
     UpdateMirror.ghProxyCn,
