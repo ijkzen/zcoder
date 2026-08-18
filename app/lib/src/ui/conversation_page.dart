@@ -1640,9 +1640,18 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
   Timer? _ticker;
   late final AnimationController _sweep;
 
-  // Half-width of the glow band in "工作中" width fractions. Kept small so
-  // the sweep lights up roughly one character at a time.
-  static const double _bandHalf = 0.18;
+  // Half-width of the glow band in "工作中" width fractions. Wide enough that
+  // a couple of characters light up at once so the sweep reads clearly.
+  static const double _bandHalf = 0.28;
+
+  // Vivid flow ramp swept across the label: cyan on the leading edge, a bright
+  // ice-white core at the band center, indigo on the trailing edge — the
+  // characters get more colorful ("流光溢彩") instead of just tinting blue.
+  static const List<Color> _flowColors = [
+    Color(0xFF20D3FF),
+    Color(0xFFBFF0FF),
+    Color(0xFF7C9BFF),
+  ];
 
   @override
   void initState() {
@@ -1663,14 +1672,16 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     super.dispose();
   }
 
-  /// [text] ("工作中") with a glow band centered at [center·width]·[0..1]:
-  /// each glyph interpolates base gray → theme primary based on how its center
-  /// sits inside the band, so the characters light up as the sweep passes.
+  /// [text] ("工作中") with a vivid flow band centered at [center·width]·[0..1]:
+  /// each glyph is bold and interpolates from base gray up to a bright
+  /// cyan→ice→indigo ramp based on where it sits inside the band, so
+  /// characters light up colorfully as the sweep passes.
   Widget _glowLabel(BuildContext context, String text, double center) {
     final scheme = Theme.of(context).colorScheme;
+    final baseColor = scheme.onSurfaceVariant;
     final base = (Theme.of(context).textTheme.labelMedium ??
             const TextStyle(fontSize: 12))
-        .copyWith(color: scheme.onSurfaceVariant);
+        .copyWith(color: baseColor, fontWeight: FontWeight.w600);
     final tp = TextPainter(
       text: TextSpan(text: text, style: base),
       textDirection: TextDirection.ltr,
@@ -1686,10 +1697,20 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     }
     final band = _bandHalf * tp.width;
     final cx = center * tp.width;
+
+    // Vivid hue across the band (u ∈ [-1, 1]): cyan → ice core → indigo.
+    Color rampColor(double u) {
+      final t = ((u + 1) / 2).clamp(0.0, 1.0);
+      return t < 0.5
+          ? Color.lerp(_flowColors[0], _flowColors[1], t * 2)!
+          : Color.lerp(_flowColors[1], _flowColors[2], (t - 0.5) * 2)!;
+    }
+
     Color colorFor(double pc) {
-      final d = (pc - cx).abs() / band;
-      final f = (1.0 - d).clamp(0.0, 1.0);
-      return Color.lerp(scheme.onSurfaceVariant, scheme.primary, f * f)!;
+      final u = (pc - cx) / band; // -1..1 across the band
+      final e = (1.0 - u.abs()).clamp(0.0, 1.0); // brightness envelope
+      if (e <= 0) return baseColor;
+      return Color.lerp(baseColor, rampColor(u), e)!;
     }
 
     final spans = <TextSpan>[];
@@ -1712,9 +1733,10 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     final elapsed = startedAt == null
         ? null
         : DateTime.now().millisecondsSinceEpoch - startedAt;
-    final style = Theme.of(
-      context,
-    ).textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant);
+    final style = Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+        );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
