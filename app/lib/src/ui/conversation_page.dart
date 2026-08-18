@@ -1155,20 +1155,6 @@ class _ConversationPageState extends State<ConversationPage> {
             _editUserQuery(row);
           },
         ),
-      if (row is AssistantTextRow)
-        ListTile(
-          leading: const Icon(Icons.refresh),
-          title: const Text('重试回合'),
-          subtitle: Text(
-            row.text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          onTap: () {
-            Navigator.of(context).pop();
-            _retryTurn(row);
-          },
-        ),
     ];
     if (actions.isEmpty) return;
     await showModalBottomSheet<void>(
@@ -1184,25 +1170,6 @@ class _ConversationPageState extends State<ConversationPage> {
     'rowId': row.rowId,
     if (row.entityId != null) 'entityId': row.entityId,
   };
-
-  Future<void> _retryTurn(AssistantTextRow row) async {
-    try {
-      await widget.app
-          .retryTurn(_rowTarget(row))
-          .timeout(const Duration(seconds: 15));
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已重新执行该回合')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('重试失败：$e')));
-      }
-    }
-  }
 
   Future<void> _editUserQuery(UserInputRow row) async {
     final controller = TextEditingController(text: row.text);

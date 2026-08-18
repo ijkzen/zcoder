@@ -310,7 +310,6 @@ class AppController extends ChangeNotifier {
     'applyFileRewind',
     'forkAssistant',
     'editUserQuery',
-    'retryTurn',
     'setAssistantFeedback',
     'sendQueuedNow',
     'editQueueItem',
@@ -329,7 +328,6 @@ class AppController extends ChangeNotifier {
     'applyFileRewind',
     'forkAssistant',
     'editUserQuery',
-    'retryTurn',
     'setAssistantFeedback',
   };
 
@@ -424,10 +422,6 @@ class AppController extends ChangeNotifier {
 
   /// Compacts the open conversation (summarizes the history so far).
   Future<Map<String, Object?>> compact() => _sendCommand('compact', const {});
-
-  /// Re-runs one assistant turn (`retryTurn`; target is `{rowId, entityId}`).
-  Future<Map<String, Object?>> retryTurn(Map<String, Object?> target) =>
-      _sendCommand('retryTurn', {'target': target});
 
   /// Edits and resends a user message (`editUserQuery`).
   Future<Map<String, Object?>> editUserQuery(

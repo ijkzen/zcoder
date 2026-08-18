@@ -103,7 +103,7 @@ From [05](05-v4-conversation-data-plane.md): `workspace-config` topic
 `conversationPlansV4`, `conversationFileChangesV4`,
 `conversationFileRewindPreviewV4`; queue commands (`sendQueuedNow`,
 `editQueueItem`, `reorderQueueItem`, `deleteQueueItem`, `setAutoDrain`);
-`compact`, `forkAssistant`, `editUserQuery`, `retryTurn`,
+`compact`, `forkAssistant`, `editUserQuery`,
 `setAssistantFeedback`, `snoozeInteractionAutoResolution`, `pauseGoal`,
 `resumeGoal`, `cancelBackgroundWork`, `switchCollaborationMode`,
 `setFollowupMode`; `queryConversationCommandsV4` (idempotent retry support);
@@ -284,7 +284,8 @@ the polling data path (rowsRange 2 s + readSession 2 s + token usage 6 s) stays.
   destructive confirm / 切换模型); `compact` command added.
 - **retryTurn / editUserQuery** — long-press on user/assistant rows opens a
   row-action sheet (edit-and-resend dialog for user input). Commands carry
-  no CAS base (no snapshot revision without push).
+  no CAS base (no snapshot revision without push). (retryTurn entry
+  subsequently removed from the app UI — see ui-test-cases v1.8.)
 - **Slash commands & skills** — `prepareWorkspace` (zcode-task) and
   `skills.list` (skills channel) wrapped; typing `/` or `$` in the composer
   opens a filtering suggestion panel (inserts `'/name '` / `'$name '`).
