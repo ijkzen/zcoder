@@ -109,6 +109,15 @@ class AppController extends ChangeNotifier {
   StreamSubscription<List<Workspace>>? _workspacesSub;
   StreamSubscription<BridgeException>? _errorsSub;
   StreamSubscription<RelayFailure>? _relayFailureSub;
+  StreamSubscription<int>? _recoveredSub;
+
+  /// True while the connection is down and the app is still trying to
+  /// reconnect: the relay dropped (phase == `reconnecting`) or the bridge is
+  /// degraded with recovery in flight (`BridgeManager.isDegraded`). Cleared
+  /// once the connection is healthy again — drives the in-app reconnect
+  /// banner on the project/session/conversation pages.
+  bool get isReconnecting =>
+      _phase == BridgePhase.reconnecting || (_bridge?.isDegraded ?? false);
 
   /// Connects to a saved pairing. Reconnects are handled by RelayClient.
   Future<void> connectTo(StoredPairing pairing) async {
@@ -147,6 +156,10 @@ class AppController extends ChangeNotifier {
     _relayFailureSub = relay.failureStream.listen((f) {
       bridgeNotificationHook?.call(BridgeException(f.reason.name, f.message));
     });
+    // Recovery completion clears the degraded flag without any phase change,
+    // so re-notify here — otherwise the reconnect banner would stick around
+    // after the connection is healthy again.
+    _recoveredSub = bridge.recoveredStream.listen((_) => notifyListeners());
 
     await bridge.start();
   }
@@ -1163,10 +1176,12 @@ class AppController extends ChangeNotifier {
     await _workspacesSub?.cancel();
     await _errorsSub?.cancel();
     await _relayFailureSub?.cancel();
+    await _recoveredSub?.cancel();
     _phaseSub = null;
     _workspacesSub = null;
     _errorsSub = null;
     _relayFailureSub = null;
+    _recoveredSub = null;
     await _bridge?.dispose();
     await _relay?.dispose();
     _bridge = null;

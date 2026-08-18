@@ -10,6 +10,7 @@ import 'attachment_picker.dart';
 import 'chat_composer.dart';
 import 'model_config_sheet.dart';
 import 'pull_to_refresh.dart';
+import 'reconnect_banner.dart';
 
 /// The provider/model/thought/mode sent when creating a session: the manual
 /// picker selection (draft) wins per value; anything unset falls back to the
@@ -906,6 +907,7 @@ class _SessionsPageState extends State<SessionsPage> {
         // rides up with the IME exactly like the conversation page does.
         body: Column(
           children: [
+            ReconnectBanner(app: widget.app),
             if (!_multiSelect) ...[
               if (_searching) _buildSearchBar(),
               _buildTabs(),

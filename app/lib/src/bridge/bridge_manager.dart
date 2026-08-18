@@ -129,7 +129,10 @@ class BridgeManager {
       case RelayState.authenticating:
         _setPhase(BridgePhase.connecting);
       case RelayState.reconnecting:
-        _setPhase(BridgePhase.connecting);
+        // Distinguish a relay drop (we were connected and are reconnecting)
+        // from the initial connect; the UI shows a reconnect banner on this
+        // phase and clears it once the relay pairs again.
+        _setPhase(BridgePhase.reconnecting);
         // A relay drop makes the bridge untrustworthy: gate commands and
         // run recovery once we are paired again.
         if (_transport != null && !_degraded) {

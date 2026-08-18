@@ -6,6 +6,7 @@ import '../protocol/topics/topic_models.dart';
 import '../protocol/zlog.dart';
 import 'project_avatar.dart';
 import 'pull_to_refresh.dart';
+import 'reconnect_banner.dart';
 import 'sessions_page.dart';
 
 /// One project (workspace) on the desktop, with the sessions the desktop
@@ -225,114 +226,136 @@ class _WorkspacesPageState extends State<WorkspacesPage> {
                 )
               : null,
         ),
-        body: ListenableBuilder(
-          listenable: app,
-          builder: (context, _) {
-            final projects = groupProjects(app.workspaces);
-            if (projects.isEmpty) {
-              return RefreshIndicator(
-                onRefresh: _refresh,
-                child: RefreshableEmptyState(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.folder_off_outlined,
-                          size: 56,
-                          color: scheme.outline,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          '桌面端没有打开的项目',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '在电脑上先打开一个项目，然后回到这里刷新',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: 16),
-                        OutlinedButton.icon(
-                          onPressed: _refresh,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('刷新'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-            return RefreshIndicator(
-              onRefresh: _refresh,
-              child: AbsorbPointer(
-                absorbing: _deleting,
-                child: ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  itemCount: projects.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, i) {
-                    final project = projects[i];
-                    final running = project.runningCount;
-                    return Card(
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: projectAvatarColor(project.label),
-                          child: Text(
-                            projectAvatarLetter(project.label),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        title: Text(
-                          project.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${project.sessions.length} 个会话 · ${project.path}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (running > 0)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Chip(
-                                  label: Text('$running 运行中'),
-                                  labelStyle: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
-                                        color: scheme.onPrimaryContainer,
-                                      ),
-                                  backgroundColor: scheme.primaryContainer,
-                                  side: BorderSide.none,
-                                  visualDensity: VisualDensity.compact,
+        body: Column(
+          children: [
+            ReconnectBanner(app: app),
+            Expanded(
+              child: ListenableBuilder(
+                listenable: app,
+                builder: (context, _) {
+                  final projects = groupProjects(app.workspaces);
+                  final Widget content;
+                  if (projects.isEmpty) {
+                    content = RefreshIndicator(
+                      onRefresh: _refresh,
+                      child: RefreshableEmptyState(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.folder_off_outlined,
+                                size: 56,
+                                color: scheme.outline,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                '桌面端没有打开的项目',
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '在电脑上先打开一个项目，然后回到这里刷新',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
                                 ),
                               ),
-                            const Icon(Icons.chevron_right),
-                          ],
+                              const SizedBox(height: 16),
+                              OutlinedButton.icon(
+                                onPressed: _refresh,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('刷新'),
+                              ),
+                            ],
+                          ),
                         ),
-                        onTap: () => _open(context, project),
-                        onLongPress: _deleting
-                            ? null
-                            : () => _deleteProject(project),
                       ),
                     );
-                  },
-                ),
+                  } else {
+                    content = RefreshIndicator(
+                      onRefresh: _refresh,
+                      child: AbsorbPointer(
+                        absorbing: _deleting,
+                        child: ListView.separated(
+                          padding: const EdgeInsets.all(12),
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: projects.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, i) {
+                            final project = projects[i];
+                            final running = project.runningCount;
+                            return Card(
+                              child: ListTile(
+                                leading: CircleAvatar(
+                                  backgroundColor: projectAvatarColor(
+                                    project.label,
+                                  ),
+                                  child: Text(
+                                    projectAvatarLetter(project.label),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                title: Text(
+                                  project.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  '${project.sessions.length} 个会话 · ${project.path}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (running > 0)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          right: 4,
+                                        ),
+                                        child: Chip(
+                                          label: Text('$running 运行中'),
+                                          labelStyle: Theme.of(context)
+                                              .textTheme
+                                              .labelSmall
+                                              ?.copyWith(
+                                                color: scheme
+                                                    .onPrimaryContainer,
+                                              ),
+                                          backgroundColor: scheme
+                                              .primaryContainer,
+                                          side: BorderSide.none,
+                                          visualDensity: VisualDensity
+                                              .compact,
+                                        ),
+                                      ),
+                                    const Icon(Icons.chevron_right),
+                                  ],
+                                ),
+                                onTap: () => _open(context, project),
+                                onLongPress: _deleting
+                                    ? null
+                                    : () => _deleteProject(project),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    );
+                  }
+                  return content;
+                },
               ),
-            );
-          },
+            ),
+          ],
         ),
       ),
     );

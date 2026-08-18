@@ -16,6 +16,7 @@ import 'chat_composer.dart';
 import 'model_config_sheet.dart';
 import 'markdown_skill_badge.dart';
 import 'mono_text.dart';
+import 'reconnect_banner.dart';
 import 'theme.dart';
 
 /// Screen 4: one session's conversation. Rows stream in incrementally,
@@ -421,6 +422,7 @@ class _ConversationPageState extends State<ConversationPage> {
           final todos = _latestTodos(state);
           return Column(
             children: [
+              ReconnectBanner(app: widget.app),
               Expanded(
                 child: Stack(
                   children: [

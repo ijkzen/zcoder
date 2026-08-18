@@ -23,9 +23,13 @@ class NotificationService {
     android: AndroidNotificationDetails(
       'zcode_remote_events',
       'ZCode 远程事件',
-      channelDescription: 'Agent 批准、完成与断线提醒',
+      channelDescription: '任务完成、出错与批准等事件提醒（含提示音与震动）',
       importance: Importance.high,
       priority: Priority.high,
+      // High importance channels make a sound and vibrate by default on
+      // Android 8+; the explicit flags also drive pre-O behavior.
+      playSound: true,
+      enableVibration: true,
     ),
   );
   final _channelQuiet = const NotificationDetails(
@@ -147,11 +151,13 @@ class NotificationService {
           _ => null,
         };
         if (done != null) {
+          // 任务完成/出错必须伴随提示音与震动，走 `_channel`（高重要度，
+          // 系统默认会响铃并振动）。
           _local.show(
             id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
             title: done,
             body: '会话 ${event['sessionId']}',
-            notificationDetails: _channelQuiet,
+            notificationDetails: _channel,
             payload: '$_approvalPrefix$workspaceKey|$sessionId',
           );
         }
@@ -160,7 +166,7 @@ class NotificationService {
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           title: 'Agent 已停滞',
           body: '会话 ${event['sessionId']} 长时间没有新输出，去看看？',
-          notificationDetails: _channelQuiet,
+          notificationDetails: _channel,
           payload: '$_approvalPrefix$workspaceKey|$sessionId',
         );
     }
