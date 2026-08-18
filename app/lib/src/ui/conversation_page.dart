@@ -1618,15 +1618,18 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
   }
 }
 
-/// Desktop-style running-turn status. "工作中" sits left-aligned with a
-/// scanning glow — a primary-colored band sweeps across those three
-/// characters and back, brightening each one as it passes — while the elapsed
-/// time is right-aligned and static. Ticks once a second — the row stream
-/// alone only refreshes on poll/delta events.
+/// Desktop-style running-turn status. A fluorescent highlight sweeps across
+/// bold "工作中" like a glowing stick passing over the line, always left to
+/// right ("工" → "中"), then restarts from the left. It is drawn as a single
+/// continuous gradient (gray → pure white → gray) masked onto the text, so the
+/// light edge passes straight through each glyph — every character brightens
+/// from the inside and both ends of the label fade — like a moving highlight
+/// over an image of the text. The elapsed time stays right-aligned and static.
+/// Ticks once a second — the row stream alone only refreshes on poll/delta
+/// events.
 ///
-/// The glow is done with per-character color interpolation rather than a
-/// ShaderMask so the sweep composites reliably on all GPUs (emulators
-/// rasterize mask layers unreliably); the result looks the same.
+/// Uses a ShaderMask (animated LinearGradient) for the continuous in-glyph
+/// gradient.
 class _TurnStatusLine extends StatefulWidget {
   final int? startedAt;
   const _TurnStatusLine({super.key, required this.startedAt});
@@ -1640,18 +1643,15 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
   Timer? _ticker;
   late final AnimationController _sweep;
 
-  // Half-width of the glow band in "工作中" width fractions. Wide enough that
-  // a couple of characters light up at once so the sweep reads clearly.
-  static const double _bandHalf = 0.28;
+  // Half-width of the light ramp in "工作中" width fractions: a white plateau
+  // in the middle with a smooth gradient fading to gray on both sides, so the
+  // gradient passes right through each glyph.
+  static const double _bandHalf = 0.2;
 
-  // Vivid flow ramp swept across the label: cyan on the leading edge, a bright
-  // ice-white core at the band center, indigo on the trailing edge — the
-  // characters get more colorful ("流光溢彩") instead of just tinting blue.
-  static const List<Color> _flowColors = [
-    Color(0xFF20D3FF),
-    Color(0xFFBFF0FF),
-    Color(0xFF7C9BFF),
-  ];
+  // Passing light flares the swept character up to pure white, while the rest
+  // of the label rests in a mid gray — maximum text-vs-light contrast.
+  static const Color _textGray = Color(0xFF8B9199);
+  static const Color _fluorescent = Color(0xFFFFFFFF);
 
   @override
   void initState() {
@@ -1662,7 +1662,7 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     _sweep = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
-    )..repeat(reverse: true);
+    )..repeat();
   }
 
   @override
@@ -1672,71 +1672,47 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     super.dispose();
   }
 
-  /// [text] ("工作中") with a vivid flow band centered at [center·width]·[0..1]:
-  /// each glyph is bold and interpolates from base gray up to a bright
-  /// cyan→ice→indigo ramp based on where it sits inside the band, so
-  /// characters light up colorfully as the sweep passes.
-  Widget _glowLabel(BuildContext context, String text, double center) {
-    final scheme = Theme.of(context).colorScheme;
-    final baseColor = scheme.onSurfaceVariant;
+  /// [text] ("工作中") lit by a continuous gradient light centered at
+  /// [center·width]: the gray→white→gray ramp passes straight through every
+  /// glyph, so each character brightens from the inside out and both ends of
+  /// the label fade — like a highlight sweeping over an image of the text.
+  Widget _fluorescentLabel(BuildContext context, String text, double center) {
     final base = (Theme.of(context).textTheme.labelMedium ??
             const TextStyle(fontSize: 12))
-        .copyWith(color: baseColor, fontWeight: FontWeight.w600);
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: base),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    final centers = <double>[];
-    for (var i = 0; i < text.length; i++) {
-      final boxes = tp.getBoxesForSelection(
-        TextSelection(baseOffset: i, extentOffset: i + 1),
-      );
-      if (boxes.isEmpty) continue;
-      final box = boxes.first;
-      centers.add(box.left + (box.right - box.left) / 2);
-    }
-    final band = _bandHalf * tp.width;
-    final cx = center * tp.width;
-
-    // Vivid hue across the band (u ∈ [-1, 1]): cyan → ice core → indigo.
-    Color rampColor(double u) {
-      final t = ((u + 1) / 2).clamp(0.0, 1.0);
-      return t < 0.5
-          ? Color.lerp(_flowColors[0], _flowColors[1], t * 2)!
-          : Color.lerp(_flowColors[1], _flowColors[2], (t - 0.5) * 2)!;
-    }
-
-    Color colorFor(double pc) {
-      final u = (pc - cx) / band; // -1..1 across the band
-      final e = (1.0 - u.abs()).clamp(0.0, 1.0); // brightness envelope
-      if (e <= 0) return baseColor;
-      return Color.lerp(baseColor, rampColor(u), e)!;
-    }
-
-    final spans = <TextSpan>[];
-    var gi = 0;
-    for (var i = 0; i < text.length && gi < centers.length; i++) {
-      spans.add(
-        TextSpan(
-          text: text[i],
-          style: base.copyWith(color: colorFor(centers[gi++])),
-        ),
-      );
-    }
-    return Text.rich(TextSpan(children: spans), style: base, maxLines: 1);
+        .copyWith(color: _textGray, fontWeight: FontWeight.w800);
+    return ShaderMask(
+      shaderCallback: (bounds) => LinearGradient(
+        colors: [
+          _textGray,
+          _textGray,
+          _fluorescent,
+          _fluorescent,
+          _textGray,
+          _textGray,
+        ],
+        stops: [
+          0,
+          center - _bandHalf,
+          center - _bandHalf * 0.4,
+          center + _bandHalf * 0.4,
+          center + _bandHalf,
+          1,
+        ],
+      ).createShader(bounds),
+      blendMode: BlendMode.srcATop,
+      child: Text(text, style: base),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final startedAt = widget.startedAt;
     final elapsed = startedAt == null
         ? null
         : DateTime.now().millisecondsSinceEpoch - startedAt;
-    final style = Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: scheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
-        );
+    final labelStyle = (Theme.of(context).textTheme.labelMedium ??
+            const TextStyle(fontSize: 12))
+        .copyWith(color: _textGray, fontWeight: FontWeight.w800);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -1745,17 +1721,17 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
           AnimatedBuilder(
             animation: _sweep,
             builder: (_, _) {
-              // Band center walks across "工作中" and back; the curve softens
-              // the turnaround so the sweep feels like breathing.
+              // Light center walks across "工作中" and back; the curve softens
+              // the turnaround so the sweep keeps flowing.
               final center = Curves.easeInOutSine
                   .transform(_sweep.value)
                   .clamp(_bandHalf, 1 - _bandHalf)
                   .toDouble();
-              return _glowLabel(context, '工作中', center);
+              return _fluorescentLabel(context, '工作中', center);
             },
           ),
           if (elapsed != null && elapsed >= 0)
-            Text(_formatDuration(elapsed), style: style),
+            Text(_formatDuration(elapsed), style: labelStyle),
         ],
       ),
     );
