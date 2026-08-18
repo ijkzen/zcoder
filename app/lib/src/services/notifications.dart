@@ -119,6 +119,13 @@ class NotificationService {
     );
   }
 
+  /// Session label for notification bodies — the task title when known
+  /// (mirrors the sessions list), never the raw sessionId.
+  static String _sessionLabel(Map<String, Object?> event) {
+    final title = event['title']?.toString() ?? '';
+    return title.isNotEmpty ? title : '未命名会话';
+  }
+
   void _handleEvent(Map<String, Object?> event) {
     if (_suppressNext) {
       _suppressNext = false;
@@ -156,7 +163,7 @@ class NotificationService {
           _local.show(
             id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
             title: done,
-            body: '会话 ${event['sessionId']}',
+            body: '会话「${_sessionLabel(event)}」',
             notificationDetails: _channel,
             payload: '$_approvalPrefix$workspaceKey|$sessionId',
           );
@@ -165,7 +172,7 @@ class NotificationService {
         _local.show(
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           title: 'Agent 已停滞',
-          body: '会话 ${event['sessionId']} 长时间没有新输出，去看看？',
+          body: '会话「${_sessionLabel(event)}」长时间没有新输出，去看看？',
           notificationDetails: _channel,
           payload: '$_approvalPrefix$workspaceKey|$sessionId',
         );

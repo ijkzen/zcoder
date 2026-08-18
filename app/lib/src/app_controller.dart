@@ -1002,6 +1002,16 @@ class AppController extends ChangeNotifier {
     return (parts[0], parts[1]);
   }
 
+  /// Best-effort session title for notification bodies: the workspace-list
+  /// `title` (wire `title` → [Workspace.taskTitle]) for any workspace's task,
+  /// falling back to the live snapshot's `meta.title`. Unknown → ''.
+  String _sessionTitle(String taskId) {
+    for (final w in _workspaces) {
+      if (w.taskId == taskId) return w.taskTitle ?? '';
+    }
+    return _conversation?.state?.meta?['title']?.toString() ?? '';
+  }
+
   Timer? _stallTimer;
   DateTime? _lastActivityAt;
   bool _stallNotified = false;
@@ -1024,6 +1034,7 @@ class AppController extends ChangeNotifier {
         hook({
           'type': 'stall',
           'sessionId': state.sessionId,
+          'title': _sessionTitle(state.sessionId),
           'workspaceKey': _bridge?.activeWorkspace?.workspaceKey,
         });
       }
@@ -1088,6 +1099,7 @@ class AppController extends ChangeNotifier {
       hook({
         'type': 'phase',
         'sessionId': taskId,
+        'title': _sessionTitle(taskId),
         'workspaceKey': workspaceKey,
         'phase': status,
       });
@@ -1124,6 +1136,7 @@ class AppController extends ChangeNotifier {
       hook({
         'type': 'phase',
         'sessionId': state.sessionId,
+        'title': _sessionTitle(state.sessionId),
         'workspaceKey': _bridge?.activeWorkspace?.workspaceKey,
         'phase': phase,
       });
