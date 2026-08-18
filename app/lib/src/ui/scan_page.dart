@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import '../protocol/relay/relay_frame.dart';
 
@@ -163,7 +163,7 @@ class _ScanPageState extends State<ScanPage>
                   if (error.errorCode ==
                       MobileScannerErrorCode.permissionDenied) {
                     return _PermissionPlaceholder(
-                      onOpenSettings: () => openAppSettings(),
+                      onOpenSettings: _openAppSettings,
                     );
                   }
                   return Center(
@@ -302,6 +302,17 @@ class _ScanPageState extends State<ScanPage>
         },
       ),
     );
+  }
+
+  /// 跳转系统设置页让用户手动授予被拒的权限（替代 permission_handler 的
+  /// openAppSettings，走 MainActivity 的 device_info 通道）。
+  Future<void> _openAppSettings() async {
+    const channel = MethodChannel('dev.ijkzen.zcode_remote/device_info');
+    try {
+      await channel.invokeMethod('openAppSettings');
+    } on PlatformException catch (e) {
+      debugPrint('[scan] 打开设置失败: $e');
+    }
   }
 }
 

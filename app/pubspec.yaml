@@ -14,13 +14,12 @@ dependencies:
   sqflite: ^2.4.3
   mobile_scanner: ^7.4.0
   flutter_local_notifications: ^22.3.0
-  flutter_foreground_task: ^10.0.0
+  flutter_foreground_task: ^11.0.0
   flutter_markdown_plus: ^1.0.7
   markdown: ^7.3.1
   image_picker: ^1.1.2
   file_picker: ^12.0.0
   wakelock_plus: ^1.7.0
-  permission_handler: ^12.0.0
   http: ^1.2.0
   path_provider: ^2.1.0
   open_filex: ^4.7.0

@@ -37,9 +37,6 @@
 # open_filex
 -keep class com.crazecoder.open_filex.** { *; }
 
-# permission_handler
--keep class com.baseflow.permissionhandler.** { *; }
-
 # image_picker
 -keep class io.flutter.plugins.imagepicker.** { *; }
 
