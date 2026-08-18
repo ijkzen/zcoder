@@ -1643,10 +1643,12 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
   Timer? _ticker;
   late final AnimationController _sweep;
 
-  // Half-width of the light ramp in "工作中" width fractions: a white plateau
-  // in the middle with a smooth gradient fading to gray on both sides, so the
-  // gradient passes right through each glyph.
-  static const double _bandHalf = 0.2;
+  // Light ramp half-width and off-screen margin, both as fractions of the
+  // total masked width. The margin lets the band slide in from beyond the left
+  // edge and roll out past the right edge, so the sweep's reset happens off
+  // screen and never looks like a jump.
+  static const double _bandHalf = 0.15;
+  static const double _padFraction = 0.8;
 
   // Passing light flares the swept character up to pure white, while the rest
   // of the label rests in a mid gray — maximum text-vs-light contrast.
@@ -1672,14 +1674,22 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     super.dispose();
   }
 
-  /// [text] ("工作中") lit by a continuous gradient light centered at
-  /// [center·width]: the gray→white→gray ramp passes straight through every
-  /// glyph, so each character brightens from the inside out and both ends of
-  /// the label fade — like a highlight sweeping over an image of the text.
-  Widget _fluorescentLabel(BuildContext context, String text, double center) {
+  /// [text] ("工作中") lit by a continuous gradient light. [sweep]∈[0..1] maps
+  /// the light from off beyond the left edge (band fully outside the glyphs)
+  /// to off beyond the right edge, so the band slides in and rolls out
+  /// naturally and its reset happens off screen. The gray→white→gray ramp
+  /// passes straight through every glyph as it travels.
+  Widget _fluorescentLabel(BuildContext context, String text, double sweep) {
     final base = (Theme.of(context).textTheme.labelMedium ??
             const TextStyle(fontSize: 12))
         .copyWith(color: _textGray, fontWeight: FontWeight.w800);
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: base),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final pad = _padFraction * tp.width;
+    // Map the sweep so the band ends up outside the masked area at both ends.
+    final c = _bandHalf + sweep * (1 - 2 * _bandHalf);
     return ShaderMask(
       shaderCallback: (bounds) => LinearGradient(
         colors: [
@@ -1692,15 +1702,18 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
         ],
         stops: [
           0,
-          center - _bandHalf,
-          center - _bandHalf * 0.4,
-          center + _bandHalf * 0.4,
-          center + _bandHalf,
+          c - _bandHalf,
+          c - _bandHalf * 0.4,
+          c + _bandHalf * 0.4,
+          c + _bandHalf,
           1,
         ],
       ).createShader(bounds),
       blendMode: BlendMode.srcATop,
-      child: Text(text, style: base),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: pad),
+        child: Text(text, style: base),
+      ),
     );
   }
 
@@ -1721,13 +1734,10 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
           AnimatedBuilder(
             animation: _sweep,
             builder: (_, _) {
-              // Light center walks across "工作中" and back; the curve softens
-              // the turnaround so the sweep keeps flowing.
-              final center = Curves.easeInOutSine
-                  .transform(_sweep.value)
-                  .clamp(_bandHalf, 1 - _bandHalf)
-                  .toDouble();
-              return _fluorescentLabel(context, '工作中', center);
+              // Sweep 0→1 travels the light from off the left edge to off the
+              // right; the curve eases the slide in/out.
+              final sweep = Curves.easeInOutSine.transform(_sweep.value);
+              return _fluorescentLabel(context, '工作中', sweep);
             },
           ),
           if (elapsed != null && elapsed >= 0)
