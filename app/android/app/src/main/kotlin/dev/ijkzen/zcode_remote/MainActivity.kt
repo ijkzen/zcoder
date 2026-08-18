@@ -16,6 +16,11 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "getSupportedAbis" ->
                         result.success(Build.SUPPORTED_ABIS.toList())
+                    "getAppVersion" -> {
+                        @Suppress("DEPRECATION")
+                        val info = packageManager.getPackageInfo(packageName, 0)
+                        result.success(info.versionName ?: "")
+                    }
                     else -> result.notImplemented()
                 }
             }

@@ -9,11 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:open_filex/open_filex.dart';
 
+import '../services/app_version.dart';
 import '../services/update_checker.dart';
 import '../storage/app_database.dart';
-
-/// App version from pubspec — kept in sync manually with pubspec.yaml.
-const appVersion = '0.4.6';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -30,10 +28,16 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _checkError;
   String? _noUpdateMsg;
 
+  /// 本机实际安装版本（从安卓包 versionName 动态读取，见 app_version.dart）。
+  String? _appVersion;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    currentAppVersion().then((version) {
+      if (mounted) setState(() => _appVersion = version);
+    });
   }
 
   Future<void> _loadSettings() async {
@@ -67,11 +71,22 @@ class _SettingsPageState extends State<SettingsPage> {
       _noUpdateMsg = null;
     });
 
+    final version = await currentAppVersion();
+    if (version == null) {
+      if (mounted) {
+        setState(() {
+          _checking = false;
+          _checkError = '无法读取当前应用版本';
+        });
+      }
+      return;
+    }
+
     try {
       final checker = UpdateChecker(
         owner: 'ijkzen',
         repo: 'zcoder',
-        currentVersion: appVersion,
+        currentVersion: version,
       );
       final info = await checker.checkForUpdate(channel: _channel);
       if (mounted) {
@@ -130,8 +145,10 @@ class _SettingsPageState extends State<SettingsPage> {
             ListTile(
               leading: const Icon(Icons.system_update),
               title: const Text('当前版本'),
-              trailing: Text('v$appVersion',
-                  style: Theme.of(context).textTheme.bodyLarge),
+              trailing: Text(
+                _appVersion == null ? '读取中…' : 'v$_appVersion',
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
             ),
             ListTile(
               leading: const Icon(Icons.rss_feed),
@@ -340,7 +357,8 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
     final checker = UpdateChecker(
       owner: 'ijkzen',
       repo: 'zcoder',
-      currentVersion: appVersion,
+      // 仅用于下载请求的 User-Agent；读取失败回退空串即可。
+      currentVersion: (await currentAppVersion()) ?? '',
     );
 
     try {

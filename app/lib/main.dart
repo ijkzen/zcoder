@@ -5,6 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/app_controller.dart';
 import 'src/protocol/zlog.dart';
+import 'src/services/app_version.dart';
 import 'src/services/notifications.dart';
 import 'src/services/update_checker.dart';
 import 'src/storage/app_database.dart';
@@ -62,6 +63,8 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
 
   Future<void> _silentCheckForUpdates() async {
     try {
+      final currentVersion = await currentAppVersion();
+      if (currentVersion == null) return;
       final channelLabel = await AppDatabase.instance.getSetting(
         'update_channel',
       );
@@ -69,7 +72,7 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
       final checker = UpdateChecker(
         owner: 'ijkzen',
         repo: 'zcoder',
-        currentVersion: appVersion,
+        currentVersion: currentVersion,
       );
       final info = await checker.checkForUpdate(channel: channel);
       if (info != null && mounted) {
