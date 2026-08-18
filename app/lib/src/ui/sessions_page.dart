@@ -1022,7 +1022,7 @@ class _SessionsPageState extends State<SessionsPage> {
                                   : null,
                             ),
                             subtitle: Text(
-                              running ? '运行中' : '已完成',
+                              _statusLabel(s.displayStatus),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -1194,6 +1194,26 @@ class _SessionsPageState extends State<SessionsPage> {
         return Colors.yellow;
       default:
         return null; // No dot for idle and other statuses
+    }
+  }
+
+  /// Subtitle label for a session row, mirrored from [Workspace.displayStatus]
+  /// so non-running statuses (error, draft, idle) never masquerade as
+  /// completed. Uses the same labels as [SessionPhase.zh].
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'running':
+        return '运行中';
+      case 'completed':
+        return '已完成';
+      case 'error':
+        return '出错';
+      case 'draft':
+        return '草稿';
+      case 'idle':
+        return '空闲';
+      default:
+        return status;
     }
   }
 }
