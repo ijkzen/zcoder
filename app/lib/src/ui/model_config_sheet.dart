@@ -30,12 +30,6 @@ class ModelConfigSheet extends StatefulWidget {
   final String? currentMode;
   final Future<void> Function(String mode)? onModeChanged;
 
-  /// Followup-mode chips (queue/guide) — how messages sent while the agent
-  /// runs are handled. Only shown when [onFollowupChanged] is provided.
-  final List<String> followupOptions;
-  final String? currentFollowup;
-  final Future<void> Function(String mode)? onFollowupChanged;
-
   /// When true every selection is disabled (e.g. the agent is running —
   /// session-level rewrites wait until it stops). The sheet stays open for
   /// browsing, with [lockedReason] shown as a banner.
@@ -51,9 +45,6 @@ class ModelConfigSheet extends StatefulWidget {
     this.modeOptions = const ['build', 'edit', 'plan', 'yolo'],
     this.currentMode,
     this.onModeChanged,
-    this.followupOptions = const ['queue', 'guide'],
-    this.currentFollowup,
-    this.onFollowupChanged,
     this.locked = false,
     this.lockedReason,
   });
@@ -89,9 +80,6 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
   /// Locally selected collaboration mode (optimistic: the chip highlights
   /// immediately; the caller persists via onModeChanged).
   String? _mode;
-
-  /// Locally selected followup mode (same optimistic pattern).
-  String? _followupMode;
 
   List<_ProviderGroup> get _providers {
     final byProvider = <String, List<ModelOption>>{};
@@ -261,18 +249,6 @@ class _ModelConfigSheetState extends State<ModelConfigSheet> {
                 local: _mode,
                 onLocalSelect: (mode) => setState(() => _mode = mode),
                 onChanged: widget.onModeChanged,
-              ),
-            ],
-            if (widget.onFollowupChanged != null) ...[
-              const SizedBox(height: 6),
-              _modeChips(
-                label: '跟随模式',
-                options: widget.followupOptions,
-                current: widget.currentFollowup,
-                local: _followupMode,
-                onLocalSelect: (mode) => setState(() => _followupMode = mode),
-                labels: const {'queue': '排队', 'guide': '引导'},
-                onChanged: widget.onFollowupChanged,
               ),
             ],
             const SizedBox(height: 8),

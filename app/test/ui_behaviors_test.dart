@@ -86,61 +86,6 @@ void main() {
     });
   });
 
-  group('ModelConfigSheet followup chips (queue/guide)', () {
-    testWidgets('renders chips and calls onFollowupChanged', (tester) async {
-      String? changed;
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: ModelConfigSheet(
-            config: const SessionModelConfig(),
-            onApply: (p, m, t) async {},
-            onModeChanged: (mode) async {},
-            onFollowupChanged: (mode) async => changed = mode,
-          ),
-        ),
-      ));
-      await tester.pumpAndSettle();
-
-      expect(find.text('跟随模式'), findsOneWidget);
-      expect(find.text('排队'), findsOneWidget);
-      expect(find.text('引导'), findsOneWidget);
-
-      await tester.tap(find.text('引导'));
-      await tester.pumpAndSettle();
-      expect(changed, 'guide');
-    });
-
-    testWidgets('currentFollowup preselects the chip', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: ModelConfigSheet(
-            config: const SessionModelConfig(),
-            onApply: (p, m, t) async {},
-            currentFollowup: 'guide',
-            onFollowupChanged: (mode) async {},
-          ),
-        ),
-      ));
-      await tester.pumpAndSettle();
-
-      final chip = tester.widget<ChoiceChip>(
-        find.ancestor(
-          of: find.text('引导'),
-          matching: find.byType(ChoiceChip),
-        ),
-      );
-      expect(chip.selected, isTrue);
-      // The collaboration-mode chips (build/edit/plan/yolo) are unaffected.
-      final queueChip = tester.widget<ChoiceChip>(
-        find.ancestor(
-          of: find.text('排队'),
-          matching: find.byType(ChoiceChip),
-        ),
-      );
-      expect(queueChip.selected, isFalse);
-    });
-  });
-
   group('ModelConfigSheet 完成 applies pending model selection', () {
     final config = SessionModelConfig(
       provider: 'p1',

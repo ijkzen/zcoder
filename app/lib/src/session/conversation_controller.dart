@@ -33,6 +33,12 @@ class ConversationState {
   /// patches) — `contextWindow.cache.hitRate` is the desktop's chat-header
   /// cache-hit-rate source, pushed in real time via frames.
   ConversationUsage? usage;
+  /// Live sub-agent registry from the snapshot's `subagents` field
+  /// (`{revision, childSessionIds, running:[{childSessionId, agentId?,
+  /// subagentType, title, summary?, status, startedAt?}], endedTotal}`).
+  /// Refreshed by full snapshots (`applySnapshot`) and `state.updated`
+  /// patches; the UI reads [runningSubagents] for the sub-agent sheets.
+  Map<String, Object?>? subagents;
   /// Flat todo list from the readSession poll (`runtime.todos` /
   /// `todoGroups` — the web client's todo panel source). Null when the poll
   /// response carried none.
@@ -73,6 +79,15 @@ class ConversationState {
        rows = SplayTreeMap<int, ConversationRow>();
 
   List<ConversationRow> get orderedRows => rows.values.toList();
+
+  /// Currently running sub-agents, in the snapshot's order (agent-visible
+  /// order). Each entry is the raw wire map: `{childSessionId, agentId?,
+  /// subagentType, title, summary?, status, startedAt?}`.
+  List<Map<String, Object?>> get runningSubagents {
+    final running = subagents?['running'];
+    if (running is! List) return const [];
+    return running.whereType<Map<String, Object?>>().toList();
+  }
 
   /// control.canStop — but only when the snapshot actually carried it.
   /// null means "unknown": the UI falls back to the readSession poll's
@@ -194,6 +209,11 @@ class ConversationState {
       }
       if (flat.isNotEmpty) readSessionTodos = flat;
     }
+    // Best-effort: some host builds inline the sub-agent registry in the
+    // readSession response too; frames are the primary source (applySnapshot /
+    // state.updated), this just keeps the registry fresh when push is down.
+    final subs = result['subagents'];
+    if (subs is Map<String, Object?>) subagents = subs;
   }
 
   void applySnapshot(ConversationSnapshot snapshot) {
@@ -209,6 +229,7 @@ class ConversationState {
     usage = snapshot.usage == null
         ? null
         : ConversationUsage.fromJson(snapshot.usage);
+    subagents = snapshot.subagents;
     pendingInteractions = snapshot.pendingInteractions
         .map(PendingInteraction.fromJson)
         .toList();
@@ -283,6 +304,8 @@ class ConversationState {
           usage = v is Map<String, Object?>
               ? ConversationUsage.fromJson(v)
               : null;
+        case 'subagents':
+          subagents = v is Map<String, Object?> ? v : null;
         case 'inputRouting':
           inputRouting = v is Map<String, Object?> ? v : null;
         case 'meta':

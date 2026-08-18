@@ -986,6 +986,29 @@ class AppController extends ChangeNotifier {
 
   final Set<String> _notifiedInteractions = {};
 
+  /// Whether the app is interactively in the foreground (resumed). Kept in
+  /// sync with `WidgetsBinding`'s lifecycle by the root app widget; used to
+  /// skip task-completion notifications for the session the user is looking
+  /// at right now.
+  bool isForeground = true;
+
+  /// True when a task-completion event for [sessionId] should be suppressed
+  /// because the user is interactively viewing that session's detail page —
+  /// firing a notification for it would just double what is already on screen.
+  static bool suppressCompletionFor({
+    required bool foreground,
+    required String? openSessionId,
+    required String sessionId,
+  }) =>
+      foreground && openSessionId == sessionId;
+
+  /// Convenience wrapper with the app's own lifecycle + open-session state.
+  bool _completionIsVisible(String sessionId) => suppressCompletionFor(
+    foreground: isForeground,
+    openSessionId: _conversation?.state?.sessionId,
+    sessionId: sessionId,
+  );
+
   /// Per-session terminal bucket already notified (`taskId → completed|error`).
   /// Shared by the detail-phase notifier and the session-list monitor so the
   /// two independent polls never double-notify.
@@ -1096,6 +1119,10 @@ class AppController extends ChangeNotifier {
     // resolves to the right project.
     final fresh = _workspaces.where((w) => w.taskId != null && !w.archived);
     for (final (:taskId, :workspaceKey, :status) in _sessionMonitor.detect(fresh)) {
+      // The user is watching that session's detail page — no notification
+      // needed (the shared notified map already marks it, so nothing fires
+      // later either).
+      if (_completionIsVisible(taskId)) continue;
       hook({
         'type': 'phase',
         'sessionId': taskId,
@@ -1133,6 +1160,9 @@ class AppController extends ChangeNotifier {
     if (terminal != null &&
         _notifiedTerminal[state.sessionId] != terminal) {
       _notifiedTerminal[state.sessionId] = terminal;
+      // User is on this session's detail page in the foreground — the state
+      // change is already visible, so skip the notification.
+      if (_completionIsVisible(state.sessionId)) return;
       hook({
         'type': 'phase',
         'sessionId': state.sessionId,

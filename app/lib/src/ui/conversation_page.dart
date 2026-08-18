@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -339,6 +340,8 @@ class _ConversationPageState extends State<ConversationPage> {
                   _runGoalCommand(widget.app.resumeGoal, '已恢复目标');
                 case 'plans':
                   _showPlansSheet();
+                case 'subagents':
+                  _showSubagentsSheet();
               }
             },
             itemBuilder: (context) {
@@ -395,6 +398,16 @@ class _ConversationPageState extends State<ConversationPage> {
                     child: ListTile(
                       leading: Icon(Icons.assignment_outlined),
                       title: Text('计划'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                // 仅在当前确有运行中的子代理时出现（快照 subagents.running[]）。
+                if (_state?.runningSubagents.isNotEmpty ?? false)
+                  const PopupMenuItem(
+                    value: 'subagents',
+                    child: ListTile(
+                      leading: Icon(Icons.hub_outlined),
+                      title: Text('运行中的子代理'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
@@ -697,6 +710,38 @@ class _ConversationPageState extends State<ConversationPage> {
     }
   }
 
+  /// Running sub-agent list. Selecting one stacks the execution-detail sheet
+  /// on top WITHOUT closing this sheet (its route stays mounted below), so
+  /// the user can inspect several sub-agents and then just dismiss back.
+  Future<void> _showSubagentsSheet() {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      enableDrag: false,
+      builder: (sheetContext) => _SubagentsSheet(
+        app: widget.app,
+        onOpen: _showSubagentDetail,
+      ),
+    );
+  }
+
+  /// The execution process of one running sub-agent: its child session's own
+  /// conversation log, rendered with the same row widgets as the main page
+  /// ("和主代理一样"). Stacked above the sub-agent list sheet.
+  Future<void> _showSubagentDetail(Map<String, Object?> entry) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => _SubagentDetailSheet(
+        app: widget.app,
+        entry: entry,
+        childSessionId: entry['childSessionId']?.toString(),
+      ),
+    );
+  }
+
   Future<void> _showRequestSheet(List<PendingRequest> requests) {
     // A modal bottom sheet (isScrollControlled) so the panel rides up with the
     // IME instead of being covered by the keyboard. Horizontal swipes between
@@ -859,22 +904,6 @@ class _ConversationPageState extends State<ConversationPage> {
               ScaffoldMessenger.of(
                 sheetContext,
               ).showSnackBar(SnackBar(content: Text('切换模式失败：$e')));
-            }
-          }
-        },
-        followupOptions: const ['queue', 'guide'],
-        currentFollowup: state.config?['followupMode']?.toString() ?? 'queue',
-        onFollowupChanged: (mode) async {
-          // Optimistic: the chip highlights immediately; the server's
-          // state.updated frame confirms (doc 08 §6.3).
-          widget.app.conversation?.optimisticSetFollowupMode(mode);
-          try {
-            await widget.app.setFollowupMode(mode);
-          } catch (e) {
-            if (sheetContext.mounted) {
-              ScaffoldMessenger.of(
-                sheetContext,
-              ).showSnackBar(SnackBar(content: Text('切换跟随模式失败：$e')));
             }
           }
         },
@@ -1153,10 +1182,15 @@ class _ConversationPageState extends State<ConversationPage> {
     // fade-and-rise. The wrapper is applied unconditionally (same key) so the
     // animation state survives streaming rebuilds; a row that is scrolled out
     // and rebuilt sees entranceRowId null and the effect does not replay.
-    return _RowEntrance(
-      key: ValueKey('entrance-${row.rowId}'),
-      animate: entranceRowId != null && row.rowId == entranceRowId,
-      child: child,
+    //
+    // RepaintBoundary keeps a dirty row (or the animated status line) from
+    // repainting its neighbors — markdown-heavy messages repaint in isolation.
+    return RepaintBoundary(
+      child: _RowEntrance(
+        key: ValueKey('entrance-${row.rowId}'),
+        animate: entranceRowId != null && row.rowId == entranceRowId,
+        child: child,
+      ),
     );
   }
 
@@ -1332,6 +1366,10 @@ String _firstLine(String s, [int max = 90]) {
   return line.length > max ? '${line.substring(0, max)}…' : line;
 }
 
+/// A sub-agent registry entry's `status` (missing → empty).
+String _entryStatus(Map<String, Object?> entry) =>
+    entry['status']?.toString() ?? '';
+
 /// Small leading icon for a one-line row, colored by status.
 Widget _statusIcon(BuildContext context, String status, IconData icon) {
   final scheme = Theme.of(context).colorScheme;
@@ -1429,18 +1467,50 @@ MarkdownStyleSheet _markdownSheet(BuildContext context, Color textColor) {
   );
 }
 
-class _MarkdownText extends StatelessWidget {
+/// A markdown body whose built widget instance is cached per element.
+///
+/// `MarkdownBody(data:)` re-parses the text on every `build`. The conversation
+/// page's whole body rebuilds on each state emit (the 2s polls notify even
+/// when nothing changed), so an unchanged long message would otherwise be
+/// re-parsed and re-laid-out several times a second — the source of scroll
+/// jank in markdown-heavy sessions. Returning the same `MarkdownBody` instance
+/// lets Flutter's `identical` short-circuit in `Element.updateChild` skip the
+/// child rebuild entirely; it is only invalidated when the text, color, or
+/// theme actually changes.
+class _MarkdownText extends StatefulWidget {
   final String text;
   final Color color;
   const _MarkdownText({required this.text, required this.color});
 
   @override
+  State<_MarkdownText> createState() => _MarkdownTextState();
+}
+
+class _MarkdownTextState extends State<_MarkdownText> {
+  MarkdownBody? _cached;
+  ThemeData? _cachedTheme;
+
+  @override
+  void didUpdateWidget(_MarkdownText old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text || old.color != widget.color) {
+      _cached = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MarkdownBody(
-      data: text,
-      selectable: true,
-      styleSheet: _markdownSheet(context, color),
-    );
+    final theme = Theme.of(context);
+    final cached = _cached;
+    if (cached == null || !identical(_cachedTheme, theme)) {
+      _cachedTheme = theme;
+      _cached = MarkdownBody(
+        data: widget.text,
+        selectable: true,
+        styleSheet: _markdownSheet(context, widget.color),
+      );
+    }
+    return _cached!;
   }
 }
 
@@ -2059,6 +2129,416 @@ class _SubagentLine extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Running sub-agent list sheet. Stays mounted while a sub-agent's
+/// execution-detail sheet is stacked on top, so switching between sub-agents
+/// never rebuilds or re-fetches the list.
+class _SubagentsSheet extends StatelessWidget {
+  final AppController app;
+  final void Function(Map<String, Object?> entry) onOpen;
+  const _SubagentsSheet({required this.app, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: ListenableBuilder(
+        listenable: app,
+        builder: (context, _) {
+          final entries = app.conversation?.state?.runningSubagents ??
+              const <Map<String, Object?>>[];
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.hub_outlined, size: 20, color: scheme.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      '运行中的子代理',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ],
+                ),
+              ),
+              if (entries.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Text(
+                    '当前没有运行中的子代理',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(context).height * 0.5,
+                  ),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: entries.length,
+                    itemBuilder: (context, i) {
+                      final entry = entries[i];
+                      return _SubagentTile(
+                        entry: entry,
+                        onTap: () => onOpen(entry),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// One running sub-agent in the list sheet.
+class _SubagentTile extends StatelessWidget {
+  final Map<String, Object?> entry;
+  final VoidCallback onTap;
+  const _SubagentTile({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final title = entry['title']?.toString() ?? '';
+    final type = entry['subagentType']?.toString() ?? '';
+    final summary = entry['summary']?.toString() ?? '';
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      leading: _statusIcon(
+        context,
+        _entryStatus(entry),
+        Icons.smart_toy_outlined,
+      ),
+      title: Text(
+        title.isEmpty ? '未命名子代理' : title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: (summary.isEmpty && type.isEmpty)
+          ? null
+          : Text(
+              [if (type.isNotEmpty) type, if (summary.isNotEmpty) summary]
+                  .join(' · '),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+      trailing: const Icon(Icons.chevron_right, size: 20),
+      onTap: onTap,
+    );
+  }
+}
+
+/// One running sub-agent's execution process: its child session's own
+/// conversation log, rendered with the same row widgets as the main page.
+/// Polls the child session's latest rows (same RPC as the main page's tail
+/// poll); the header status follows the snapshot's subagents registry live.
+class _SubagentDetailSheet extends StatefulWidget {
+  final AppController app;
+  final Map<String, Object?> entry;
+  final String? childSessionId;
+  const _SubagentDetailSheet({
+    required this.app,
+    required this.entry,
+    this.childSessionId,
+  });
+
+  @override
+  State<_SubagentDetailSheet> createState() => _SubagentDetailSheetState();
+}
+
+class _SubagentDetailSheetState extends State<_SubagentDetailSheet> {
+  final SplayTreeMap<int, ConversationRow> _rows = SplayTreeMap();
+  bool _loading = true;
+  String? _error;
+  Timer? _pollTimer;
+  bool _disposed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final childId = widget.childSessionId;
+    if (childId == null || childId.isEmpty) {
+      _loading = false;
+      _error = '该子代理没有可查看的会话';
+      return;
+    }
+    _fetch();
+    // Mirror the main page's 2s tail-poll cadence for the child session.
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _fetch());
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetch() async {
+    final channel = widget.app.conversation?.bridge.topicSession;
+    final childId = widget.childSessionId;
+    if (channel == null || childId == null || childId.isEmpty) return;
+    try {
+      final result = await channel.rowsRange(childId, limit: 60);
+      final rowsJson = result['rows'];
+      if (rowsJson is! List) return;
+      if (_disposed || !mounted) return;
+      setState(() {
+        _loading = false;
+        _error = null;
+        for (final r in rowsJson.whereType<Map<String, Object?>>()) {
+          final row = ConversationRow.fromJson(r);
+          _rows[row.rowId] = row;
+        }
+      });
+    } catch (e) {
+      if (_disposed || !mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  /// The live registry entry for this sub-agent, if it is still running.
+  Map<String, Object?>? _liveEntry() {
+    final childId = widget.childSessionId;
+    if (childId == null) return null;
+    final running = widget.app.conversation?.state?.runningSubagents ??
+        const <Map<String, Object?>>[];
+    for (final e in running) {
+      if (e['childSessionId']?.toString() == childId) return e;
+    }
+    return null;
+  }
+
+  String _statusZh(String status) => switch (status) {
+    'running' => '运行中',
+    'success' => '已完成',
+    'error' => '出错',
+    _ => status.isEmpty ? '' : status,
+  };
+
+  String _age(int? startedAt) {
+    if (startedAt == null || startedAt <= 0) return '';
+    final elapsed = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(startedAt),
+    );
+    if (elapsed.inMinutes < 1) return '${elapsed.inSeconds}s';
+    return '${elapsed.inMinutes}m';
+  }
+
+  /// Reasoning detail dialog, mirroring the main page: the collapsed
+  /// "思考过程" line expands on tap to the full thinking text.
+  void _showReasoningDetail(ReasoningRow row, int? durationMs) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _DetailDialog(
+        title: durationMs == null
+            ? '思考过程'
+            : '思考过程 · 持续了 ${_formatDuration(durationMs)}',
+        child: SelectableText(
+          row.text,
+          style: Theme.of(
+            dialogContext,
+          ).textTheme.bodySmall?.copyWith(height: 1.5),
+        ),
+      ),
+    );
+  }
+
+  /// Tool input/output detail dialog (same shape as the main page).
+  void _showToolDetail(ToolCallRow row) {
+    final (_, verb, _) = _ToolCallLine._describe(row);
+    final input = _ToolCallLine._prettyInput(row);
+    final output = row.output;
+    final title = verb == row.toolName ? row.toolName : '$verb ${row.toolName}';
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _DetailDialog(
+        title: title,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (input.isNotEmpty) ...[
+              const DetailLabel('输入'),
+              MonoText(text: _ToolCallLine._trim(input)),
+            ],
+            if (output != null && output.isNotEmpty) ...[
+              const DetailLabel('输出'),
+              MonoText(text: _ToolCallLine._trim(output)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Renders one child-session row with the same widgets as the main page.
+  /// [nextCreatedAt] is the chronologically-next row's timestamp, used for
+  /// the reasoning-duration label like the main page.
+  Widget _buildRow(ConversationRow row, {int? nextCreatedAt}) {
+    switch (row) {
+      case UserInputRow():
+        return _LongPressRow(
+          onLongPress: () {},
+          child: _UserBubble(row: row, app: widget.app),
+        );
+      case AssistantTextRow():
+        if (row.text.trim().isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: _LongPressRow(
+            onLongPress: () {},
+            child: _MarkdownText(
+              text: row.text,
+              color: RowColors.assistant(context),
+            ),
+          ),
+        );
+      case ReasoningRow():
+        // Thinking duration ≈ time until the next row appeared (main page
+        // parity).
+        int? durationMs;
+        final started = row.createdAt;
+        if (started != null && nextCreatedAt != null) {
+          final d = nextCreatedAt - started;
+          if (d >= 1000 && d < 30 * 60 * 1000) durationMs = d;
+        }
+        return _ReasoningLine(
+          durationMs: durationMs,
+          onTap: row.text.isEmpty
+              ? null
+              : () => _showReasoningDetail(row, durationMs),
+        );
+      case ToolCallRow():
+        return _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
+      case SubagentRow():
+        return _SubagentLine(row: row);
+      case TimelineMarkerRow():
+        return _TimelineMarkerLine(row: row);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _body(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final rows = _rows.values.toList();
+    if (rows.isEmpty) {
+      // Show the fetch error only when there is nothing to display; transient
+      // poll failures while rows exist keep the log visible (the next tick
+      // recovers).
+      if (_error != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              '无法加载子代理执行记录：$_error',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.error),
+            ),
+          ),
+        );
+      }
+      return Center(
+        child: Text(
+          '暂无执行记录',
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      );
+    }
+    return ListView.builder(
+      reverse: true, // newest at the visual bottom — new rows stay in view
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+      itemCount: rows.length,
+      itemBuilder: (context, i) {
+        // rows is ascending; index n−1−i walks newest→oldest. The
+        // chronologically-next row for rows[k] is rows[k+1], whose timestamp
+        // sizes the reasoning-duration label.
+        final k = rows.length - 1 - i;
+        return _buildRow(
+          rows[k],
+          nextCreatedAt: k + 1 < rows.length ? rows[k + 1].createdAt : null,
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.85,
+        child: ListenableBuilder(
+          listenable: widget.app,
+          builder: (context, _) {
+            final live = _liveEntry() ?? widget.entry;
+            final title = live['title']?.toString() ?? '';
+            final status = _statusZh(_entryStatus(live));
+            final type = live['subagentType']?.toString() ?? '';
+            final age = _age(live['startedAt'] as int?);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: Row(
+                    children: [
+                      Icon(Icons.smart_toy_outlined, size: 20,
+                          color: scheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title.isEmpty ? '未命名子代理' : title,
+                              style: Theme.of(context).textTheme.titleSmall,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (type.isNotEmpty || status.isNotEmpty || age.isNotEmpty)
+                              Text(
+                                [type, status, if (age.isNotEmpty) '已运行 $age']
+                                    .where((s) => s.isNotEmpty)
+                                    .join(' · '),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: scheme.onSurfaceVariant),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(child: _body(context)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }

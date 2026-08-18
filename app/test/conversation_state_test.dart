@@ -252,4 +252,97 @@ void main() {
       expect(s.canResumeGoal, isFalse);
     });
   });
+
+  group('subagents (snapshot registry → runningSubagents)', () {
+    test('applySnapshot parses running[] into runningSubagents', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+        'subagents': {
+          'revision': 3,
+          'childSessionIds': ['child_a', 'child_b'],
+          'running': [
+            {
+              'childSessionId': 'child_a',
+              'subagentType': 'Explore',
+              'title': '调研资料',
+              'summary': '正在阅读文档',
+              'status': 'running',
+              'startedAt': 1000,
+            },
+          ],
+          'endedTotal': 2,
+        },
+      }));
+      final running = s.runningSubagents;
+      expect(running, hasLength(1));
+      expect(running.first['childSessionId'], 'child_a');
+      expect(running.first['title'], '调研资料');
+      expect(running.first['summary'], '正在阅读文档');
+    });
+
+    test('state.updated patch replaces the registry (live refresh)', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+        'subagents': {
+          'revision': 1,
+          'running': [
+            {'childSessionId': 'a', 'subagentType': 'Explore', 'status': 'running'},
+          ],
+          'endedTotal': 0,
+        },
+      }));
+      s.applyDelta({
+        'op': 'state.updated',
+        'patch': {
+          'subagents': {
+            'revision': 2,
+            'running': [
+              {'childSessionId': 'b', 'subagentType': 'Implementer', 'status': 'running'},
+            ],
+            'endedTotal': 1,
+          },
+        },
+      });
+      expect(s.runningSubagents, hasLength(1));
+      expect(s.runningSubagents.first['childSessionId'], 'b');
+    });
+
+    test('runningSubagents is empty when no registry arrived', () {
+      final s = state();
+      s.applySnapshot(ConversationSnapshot.fromJson({
+        'sessionId': 'sess_1',
+        'logEpoch': 'epoch',
+        'seq': 1,
+        'revision': 2,
+        'rows': {'window': <Object?>[]},
+      }));
+      expect(s.runningSubagents, isEmpty);
+    });
+
+    test('applyReadSession carries subagents when the host inlines it', () {
+      final s = state();
+      s.applyReadSession({
+        'session': {'status': 'running'},
+        'subagents': {
+          'revision': 1,
+          'running': [
+            {'childSessionId': 'c', 'subagentType': 'Explore', 'status': 'running'},
+          ],
+          'endedTotal': 0,
+        },
+      });
+      expect(s.runningSubagents, hasLength(1));
+      expect(s.runningSubagents.first['childSessionId'], 'c');
+    });
+  });
 }

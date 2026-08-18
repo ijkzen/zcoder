@@ -692,6 +692,11 @@ class ConversationSnapshot {
   /// row reads `contextWindow.cache.hitRate` from here, so this is the source
   /// the token sheet mirrors for 平均缓存命中率.
   final Map<String, Object?>? usage;
+  /// Live sub-agent registry (`{revision, childSessionIds,
+  /// running:[{childSessionId, agentId?, subagentType, title, summary?,
+  /// status, startedAt?}], endedTotal}`) — the sub-agent list & execution
+  /// sheets read it and it refreshes via `state.updated` patches.
+  final Map<String, Object?>? subagents;
   final List<Map<String, Object?>> pendingInteractions;
   final List<Map<String, Object?>> pendingCommands;
   final List<ConversationRow> rows;
@@ -711,6 +716,7 @@ class ConversationSnapshot {
     this.queue,
     this.plan,
     this.usage,
+    this.subagents,
     required this.pendingInteractions,
     required this.pendingCommands,
     required this.rows,
@@ -764,6 +770,9 @@ class ConversationSnapshot {
           : null,
       usage: json['usage'] is Map<String, Object?>
           ? json['usage'] as Map<String, Object?>
+          : null,
+      subagents: json['subagents'] is Map<String, Object?>
+          ? json['subagents'] as Map<String, Object?>
           : null,
       pendingInteractions: interactions,
       pendingCommands: pendingCommands,

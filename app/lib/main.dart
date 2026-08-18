@@ -32,12 +32,14 @@ class ZcodeRemoteApp extends StatefulWidget {
   State<ZcodeRemoteApp> createState() => _ZcodeRemoteAppState();
 }
 
-class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
+class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
+    with WidgetsBindingObserver {
   StreamSubscription<String>? _deepLinkSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Notification tap while the app is running: navigate immediately when a
     // connection is up; otherwise the link stays pending for the next connect.
     _deepLinkSub = widget.app.deepLinkStream.listen((raw) {
@@ -59,6 +61,14 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_silentCheckForUpdates());
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // "Resumed" = interactively in the foreground. Completion notifications
+    // are suppressed for the session the user is currently viewing (see
+    // AppController._completionIsVisible); anything else stays eligible.
+    widget.app.isForeground = state == AppLifecycleState.resumed;
   }
 
   Future<void> _silentCheckForUpdates() async {
@@ -101,6 +111,7 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp> {
   @override
   void dispose() {
     _deepLinkSub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
