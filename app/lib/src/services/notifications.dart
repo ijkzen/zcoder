@@ -11,6 +11,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../app_controller.dart';
 import '../bridge/bridge_manager.dart';
 import '../protocol/topics/topic_models.dart';
+import '../protocol/zlog.dart';
 
 class NotificationService {
   NotificationService._();
@@ -67,6 +68,17 @@ class NotificationService {
         >()
         ?.requestNotificationsPermission();
 
+    // Cold start via a notification tap: the response callback above never
+    // fires for a process that was dead, so read the launch intent instead.
+    final launch = await _local.getNotificationAppLaunchDetails();
+    if ((launch?.didNotificationLaunchApp ?? false) && app != null) {
+      final payload = launch?.notificationResponse?.payload;
+      if (payload != null && payload.startsWith(_approvalPrefix)) {
+        app.requestDeepLink(payload.substring(_approvalPrefix.length));
+        zlog('[notify] 冷启动通知 payload：$payload');
+      }
+    }
+
     if (app != null) {
       app.onNotificationEvent = _handleEvent;
       app.bridgeNotificationHook = _handleBridgeEvent;
@@ -108,12 +120,16 @@ class NotificationService {
       _suppressNext = false;
       return;
     }
+    final sessionId = event['sessionId']?.toString() ?? '';
+    final workspaceKey = event['workspaceKey']?.toString() ?? '';
+    if (workspaceKey.isEmpty || sessionId.isEmpty) {
+      zlog('[notify] 事件 ${event['type']} 缺少目标信息 '
+          'workspaceKey="$workspaceKey" sessionId="$sessionId"');
+    }
     switch (event['type']) {
       case 'pending-interaction':
         final prompt = (event['prompt'] ?? '').toString();
         final toolName = (event['toolName'] ?? '').toString();
-        final sessionId = event['sessionId']?.toString() ?? '';
-        final workspaceKey = event['workspaceKey']?.toString() ?? '';
         _local.show(
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           title: '需要你的操作',
@@ -127,11 +143,10 @@ class NotificationService {
           SessionPhase.completedSuccess => '任务已完成',
           SessionPhase.completedInterrupted => '任务已中断',
           SessionPhase.error => '执行出错',
+          'completed' => '任务已完成', // 会话列表层 displayStatus
           _ => null,
         };
         if (done != null) {
-          final sessionId = event['sessionId']?.toString() ?? '';
-          final workspaceKey = event['workspaceKey']?.toString() ?? '';
           _local.show(
             id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
             title: done,
@@ -141,8 +156,6 @@ class NotificationService {
           );
         }
       case 'stall':
-        final sessionId = event['sessionId']?.toString() ?? '';
-        final workspaceKey = event['workspaceKey']?.toString() ?? '';
         _local.show(
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           title: 'Agent 已停滞',

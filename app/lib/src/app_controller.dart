@@ -17,6 +17,7 @@ import 'services/notifications.dart';
 import 'protocol/services/services.dart';
 import 'protocol/zlog.dart';
 import 'session/conversation_controller.dart';
+import 'session/session_status_monitor.dart';
 import 'protocol/topics/topic_models.dart';
 import 'storage/app_database.dart';
 
@@ -125,6 +126,9 @@ class AppController extends ChangeNotifier {
       _phase = p;
       if (p == BridgePhase.ready) {
         NotificationService.instance.cancelReconnectNotification();
+        _startListStatusMonitor();
+      } else {
+        _stopListStatusMonitor();
       }
       notifyListeners();
     });
@@ -259,7 +263,6 @@ class AppController extends ChangeNotifier {
     _conversation = null;
     _cachedRowIds.clear();
     _notifiedInteractions.clear();
-    _lastNotifiedPhase = null;
     final bridge = _bridge;
     if (bridge == null) return;
     final controller = ConversationController(bridge, sessionId);
@@ -975,7 +978,11 @@ class AppController extends ChangeNotifier {
   void discardPendingDeepLink() => pendingDeepLink = null;
 
   final Set<String> _notifiedInteractions = {};
-  String? _lastNotifiedPhase;
+
+  /// Per-session terminal bucket already notified (`taskId → completed|error`).
+  /// Shared by the detail-phase notifier and the session-list monitor so the
+  /// two independent polls never double-notify.
+  final Map<String, String> _notifiedTerminal = {};
 
   /// If a notification tap asked us to open a session, returns its
   /// `(workspaceKey, sessionId)` and clears the pending link.
@@ -1021,6 +1028,65 @@ class AppController extends ChangeNotifier {
     _stallTimer = null;
   }
 
+  // ---------- Session-list completion monitor ----------
+
+  /// Low-frequency poll of the workspace session list so completion
+  /// notifications keep flowing while the user is not inside the session
+  /// (the detail controller's 2s poll only lives while its page is open).
+  /// Runs only while the bridge is `ready`; terminal crossings are detected
+  /// by [SessionStatusMonitor] against the same per-session notified map as
+  /// the detail path, so the two polls never double-notify.
+  Timer? _listStatusTimer;
+  static const _listStatusInterval = Duration(seconds: 20);
+  late final SessionStatusMonitor _sessionMonitor =
+      SessionStatusMonitor(_notifiedTerminal);
+
+  void _startListStatusMonitor() {
+    _stopListStatusMonitor();
+    unawaited(_pollListStatus()); // baseline immediately, then every tick
+    _listStatusTimer = Timer.periodic(_listStatusInterval, (_) {
+      unawaited(_pollListStatus());
+    });
+  }
+
+  void _stopListStatusMonitor() {
+    _listStatusTimer?.cancel();
+    _listStatusTimer = null;
+  }
+
+  Future<void> _pollListStatus() async {
+    final bridge = _bridge;
+    final hook = onNotificationEvent;
+    if (bridge == null || hook == null) return;
+    try {
+      await bridge.refreshWorkspaceList().timeout(
+        const Duration(seconds: 10),
+      );
+    } catch (_) {
+      return; // transient — keep the snapshot and retry next tick
+    }
+    _emitListStatusTransitions();
+  }
+
+  void _emitListStatusTransitions() {
+    final hook = onNotificationEvent;
+    if (hook == null || _bridge == null) return;
+    // The workspace-list payload carries every task of every workspace (each
+    // task names its workspace), so the monitor is not tied to the active
+    // workspace — a task finishing in another project still notifies. The
+    // payload's workspaceKey is the task's own, so tapping the notification
+    // resolves to the right project.
+    final fresh = _workspaces.where((w) => w.taskId != null && !w.archived);
+    for (final (:taskId, :workspaceKey, :status) in _sessionMonitor.detect(fresh)) {
+      hook({
+        'type': 'phase',
+        'sessionId': taskId,
+        'workspaceKey': workspaceKey,
+        'phase': status,
+      });
+    }
+  }
+
   void _handleConversationState(ConversationState state) {
     _lastActivityAt = DateTime.now();
     _cacheState(state);
@@ -1040,10 +1106,14 @@ class AppController extends ChangeNotifier {
         'toolName': interaction.toolName,
       });
     }
-    // Notify on phase *transitions* to terminal states, once each.
+    // Notify on transitions into a terminal state, once per session. The
+    // shared per-session map also dedups against the session-list monitor,
+    // which polls independently while the user is not in the detail page.
     final phase = state.phase;
-    if (SessionPhase.isTerminal(phase) && _lastNotifiedPhase != phase) {
-      _lastNotifiedPhase = phase;
+    final terminal = normalizeTerminalStatus(phase);
+    if (terminal != null &&
+        _notifiedTerminal[state.sessionId] != terminal) {
+      _notifiedTerminal[state.sessionId] = terminal;
       hook({
         'type': 'phase',
         'sessionId': state.sessionId,
@@ -1092,6 +1162,7 @@ class AppController extends ChangeNotifier {
   // ---------- Lifecycle ----------
 
   Future<void> disconnect() async {
+    _stopListStatusMonitor();
     await _conversation?.dispose();
     _conversation = null;
     await _phaseSub?.cancel();
