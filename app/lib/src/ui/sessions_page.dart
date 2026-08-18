@@ -11,6 +11,25 @@ import 'chat_composer.dart';
 import 'model_config_sheet.dart';
 import 'pull_to_refresh.dart';
 
+/// The provider/model/thought/mode sent when creating a session: the manual
+/// picker selection (draft) wins per value; anything unset falls back to the
+/// workspace-synced current — the exact value the label above the input bar
+/// shows. Forcing the synced value instead of sending nothing keeps the phone
+/// label and the executed model in agreement; the desktop otherwise resolves
+/// its own default, which has been observed to diverge from the synced one.
+SessionModelConfig effectiveSessionModelConfig({
+  SessionModelConfig? workspace,
+  String? draftProvider,
+  String? draftModel,
+  String? draftThought,
+  String? draftMode,
+}) => SessionModelConfig(
+  provider: draftProvider ?? workspace?.provider,
+  model: draftModel ?? workspace?.model,
+  thoughtLevel: draftThought ?? workspace?.thoughtLevel,
+  mode: draftMode ?? workspace?.mode,
+);
+
 /// Screen 3: sessions of the active workspace. Also the entry point for
 /// starting a new session (bottom input bar).
 class SessionsPage extends StatefulWidget {
@@ -179,6 +198,17 @@ class _SessionsPageState extends State<SessionsPage> {
     );
   }
 
+  /// The model actually used to create the next session (both here and in
+  /// [effectiveSessionModelConfig]): picker selection where set, else the
+  /// workspace-synced current.
+  SessionModelConfig get _sessionModelConfig => effectiveSessionModelConfig(
+    workspace: _workspaceConfig,
+    draftProvider: _draftProvider,
+    draftModel: _draftModel,
+    draftThought: _draftThought,
+    draftMode: _draftMode,
+  );
+
   /// ChatComposer onSend: returns true when the session was created (the
   /// composer then clears itself); on failure the draft stays (TC-SES-024).
   Future<bool> _createSession(String rawText) async {
@@ -193,13 +223,14 @@ class _SessionsPageState extends State<SessionsPage> {
       return _createWithAttachments(text);
     }
     try {
+      final cfg = _sessionModelConfig;
       final sessionId = await widget.app
           .createSession(
             text,
-            provider: _draftProvider,
-            model: _draftModel,
-            thoughtLevel: _draftThought,
-            mode: _draftMode,
+            provider: cfg.provider,
+            model: cfg.model,
+            thoughtLevel: cfg.thoughtLevel,
+            mode: cfg.mode,
           )
           .timeout(const Duration(seconds: 15));
       // The selection stays: it is persisted for the next session too.
@@ -236,13 +267,14 @@ class _SessionsPageState extends State<SessionsPage> {
     var sessionId = _pendingSessionId;
     if (sessionId == null) {
       try {
+        final cfg = _sessionModelConfig;
         sessionId = await widget.app
             .createSession(
               null,
-              provider: _draftProvider,
-              model: _draftModel,
-              thoughtLevel: _draftThought,
-              mode: _draftMode,
+              provider: cfg.provider,
+              model: cfg.model,
+              thoughtLevel: cfg.thoughtLevel,
+              mode: cfg.mode,
             )
             .timeout(const Duration(seconds: 15));
       } catch (e) {

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zcode_remote/src/app_controller.dart';
 import 'package:zcode_remote/src/protocol/topics/topic_models.dart';
 import 'package:zcode_remote/src/ui/model_config_sheet.dart';
+import 'package:zcode_remote/src/ui/sessions_page.dart';
 
 void main() {
   group('extractSessionIdFromResult', () {
@@ -257,6 +258,62 @@ void main() {
       await tester.tap(find.text('完成'));
       await tester.pumpAndSettle();
       expect(applied, isEmpty);
+    });
+  });
+
+  group('effectiveSessionModelConfig (create-session model = workspace sync)', () {
+    final ws = SessionModelConfig(
+      provider: 'ws-prov',
+      model: 'ws-model',
+      thoughtLevel: 'max',
+      mode: 'build',
+    );
+
+    test('no picker selection → uses the workspace-synced current', () {
+      final c = effectiveSessionModelConfig(workspace: ws);
+      expect(c.provider, 'ws-prov');
+      expect(c.model, 'ws-model');
+      expect(c.thoughtLevel, 'max');
+      expect(c.mode, 'build');
+    });
+
+    test('partial picker selection overrides only the picked fields', () {
+      final c = effectiveSessionModelConfig(
+        workspace: ws,
+        draftProvider: 'draft-prov',
+        draftModel: 'draft-model',
+      );
+      expect(c.provider, 'draft-prov');
+      expect(c.model, 'draft-model');
+      // Unpicked fields keep the workspace-synced values.
+      expect(c.thoughtLevel, 'max');
+      expect(c.mode, 'build');
+    });
+
+    test('full picker selection wins entirely', () {
+      final c = effectiveSessionModelConfig(
+        workspace: ws,
+        draftProvider: 'd1',
+        draftModel: 'm1',
+        draftThought: 'low',
+        draftMode: 'plan',
+      );
+      expect(c.provider, 'd1');
+      expect(c.model, 'm1');
+      expect(c.thoughtLevel, 'low');
+      expect(c.mode, 'plan');
+    });
+
+    test('workspace not synced (offline) → picker selection only', () {
+      final c = effectiveSessionModelConfig(
+        workspace: null,
+        draftProvider: 'd2',
+        draftModel: 'm2',
+      );
+      expect(c.provider, 'd2');
+      expect(c.model, 'm2');
+      expect(c.thoughtLevel, isNull);
+      expect(c.mode, isNull);
     });
   });
 }
