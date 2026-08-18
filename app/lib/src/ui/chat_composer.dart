@@ -46,9 +46,21 @@ class ChatComposer extends StatefulWidget {
   State<ChatComposer> createState() => _ChatComposerState();
 }
 
-class _ChatComposerState extends State<ChatComposer> {
+class _ChatComposerState extends State<ChatComposer>
+    with SingleTickerProviderStateMixin {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+
+  /// Send-button feedback: a quick squash-and-recover played whenever a
+  /// message is accepted (both from the compact box and the expanded editor).
+  late final AnimationController _sendPulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
+  );
+  late final Animation<double> _sendScale = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.85), weight: 40),
+    TweenSequenceItem(tween: Tween(begin: 0.85, end: 1.0), weight: 60),
+  ]).animate(CurvedAnimation(parent: _sendPulse, curve: Curves.easeOut));
 
   /// Busy state mirrored for the expanded editor, which lives on a separate
   /// route and cannot rebuild when this state changes.
@@ -86,6 +98,7 @@ class _ChatComposerState extends State<ChatComposer> {
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
+    _sendPulse.dispose();
     _busyListenable.dispose();
     _headerListenable.dispose();
     super.dispose();
@@ -99,7 +112,10 @@ class _ChatComposerState extends State<ChatComposer> {
     _syncBusy();
     try {
       final accepted = await widget.onSend(_controller.text);
-      if (accepted && mounted) _controller.clear();
+      if (accepted && mounted) {
+        _controller.clear();
+        _sendPulse.forward(from: 0);
+      }
       return accepted;
     } finally {
       if (mounted) {
@@ -142,6 +158,7 @@ class _ChatComposerState extends State<ChatComposer> {
           busyListenable: _busyListenable,
           headerListenable: _headerListenable,
           onSend: _send,
+          sendScale: _sendScale,
           onPickAttachment: widget.onPickAttachment,
         ),
       ),
@@ -179,6 +196,7 @@ class _ChatComposerState extends State<ChatComposer> {
               onSkill: () => _insertTrigger(_controller, _focusNode, r'$'),
               onAttachment: widget.onPickAttachment,
               onSend: _send,
+              sendScale: _sendScale,
             ),
           ],
         ),
@@ -262,6 +280,7 @@ class _ComposerButtonRow extends StatelessWidget {
     required this.onSkill,
     required this.onAttachment,
     required this.onSend,
+    required this.sendScale,
   });
 
   final bool busy;
@@ -270,6 +289,7 @@ class _ComposerButtonRow extends StatelessWidget {
   final VoidCallback onSkill;
   final VoidCallback? onAttachment;
   final VoidCallback onSend;
+  final Animation<double> sendScale;
 
   @override
   Widget build(BuildContext context) {
@@ -292,11 +312,14 @@ class _ComposerButtonRow extends StatelessWidget {
             icon: const Icon(Icons.image_outlined),
           ),
         const Spacer(),
-        IconButton(
-          tooltip: '发送',
-          style: IconButton.styleFrom(backgroundColor: Colors.transparent),
-          onPressed: busy ? null : onSend,
-          icon: const Icon(Icons.send),
+        ScaleTransition(
+          scale: sendScale,
+          child: IconButton(
+            tooltip: '发送',
+            style: IconButton.styleFrom(backgroundColor: Colors.transparent),
+            onPressed: busy ? null : onSend,
+            icon: const Icon(Icons.send),
+          ),
         ),
       ],
     );
@@ -345,6 +368,7 @@ class _ExpandedComposerPage extends StatefulWidget {
     required this.busyListenable,
     required this.headerListenable,
     required this.onSend,
+    required this.sendScale,
     required this.onPickAttachment,
   });
 
@@ -361,6 +385,10 @@ class _ExpandedComposerPage extends StatefulWidget {
   /// Returns true when the message was accepted — the editor then closes
   /// itself.
   final Future<bool> Function() onSend;
+
+  /// Shared with the compact composer so sends from this editor replay the
+  /// same send-button feedback.
+  final Animation<double> sendScale;
   final VoidCallback? onPickAttachment;
 
   @override
@@ -470,6 +498,7 @@ class _ExpandedComposerPageState extends State<_ExpandedComposerPage> {
                   ),
                   onAttachment: widget.onPickAttachment,
                   onSend: _sendAndClose,
+                  sendScale: widget.sendScale,
                 ),
               ),
             ],

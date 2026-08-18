@@ -56,6 +56,16 @@ class _ConversationPageState extends State<ConversationPage> {
   /// follow (task: auto-scroll only while the user is at the bottom).
   int? _lastNewestRowId;
 
+  /// Row ids that have already run (or are ineligible for) the entrance
+  /// animation. Lives at the page level so the one-shot "new message
+  /// arrives" effect survives row-element rebuilds while scrolling.
+  final Set<int> _enteredRowIds = <int>{};
+
+  /// Whether the row log has been seeded as the animation baseline. The
+  /// initial snapshot renders without entrance effects; only rows streamed
+  /// in after this page attached animate in.
+  bool _rowBaselineSeeded = false;
+
   ConversationState? _state;
 
   /// 会话是否已有可展示的计划（ExitPlanMode）——「计划」菜单项只在该会话
@@ -413,8 +423,21 @@ class _ConversationPageState extends State<ConversationPage> {
           // follow (see _onScroll); the floating button or scrolling back to
           // the bottom re-engages it.
           final newestRowId = rows.isEmpty ? null : rows.last.rowId;
+          // First snapshot is the animation baseline: history rows render
+          // without entrance effects, so only rows streamed in while this
+          // page is open fade-and-rise into view.
+          if (!_rowBaselineSeeded) {
+            _rowBaselineSeeded = true;
+            _enteredRowIds.addAll(rows.map((r) => r.rowId));
+          }
+          int? entranceRowId;
           if (newestRowId != _lastNewestRowId) {
+            if (newestRowId != null &&
+                !_enteredRowIds.contains(newestRowId)) {
+              entranceRowId = newestRowId;
+            }
             _lastNewestRowId = newestRowId;
+            _enteredRowIds.addAll(rows.map((r) => r.rowId));
             if (_atBottom && newestRowId != null) _jumpToBottom();
           }
           final extraStatusRow = runningTurn != null ? 1 : 0;
@@ -452,6 +475,7 @@ class _ConversationPageState extends State<ConversationPage> {
                                 nextCreatedAt: j + 1 < rows.length
                                     ? rows[j + 1].createdAt
                                     : null,
+                                entranceRowId: entranceRowId,
                               );
                             },
                           ),
@@ -1078,16 +1102,18 @@ class _ConversationPageState extends State<ConversationPage> {
     BuildContext context,
     ConversationRow row, {
     int? nextCreatedAt,
+    int? entranceRowId,
   }) {
+    final Widget child;
     switch (row) {
       case UserInputRow():
-        return _LongPressRow(
+        child = _LongPressRow(
           onLongPress: () => _showRowActions(row),
           child: _UserBubble(row: row, app: widget.app),
         );
       case AssistantTextRow():
         if (row.text.trim().isEmpty) return const SizedBox.shrink();
-        return Padding(
+        child = Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: _LongPressRow(
             onLongPress: () => _showRowActions(row),
@@ -1105,24 +1131,33 @@ class _ConversationPageState extends State<ConversationPage> {
           final d = nextCreatedAt - started;
           if (d >= 1000 && d < 30 * 60 * 1000) durationMs = d;
         }
-        return _ReasoningLine(
+        child = _ReasoningLine(
           durationMs: durationMs,
           onTap: row.text.isEmpty
               ? null
               : () => _showReasoningDetail(row, durationMs),
         );
       case ToolCallRow():
-        return _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
+        child = _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
       case SubagentRow():
-        return _SubagentLine(row: row);
+        child = _SubagentLine(row: row);
       case TimelineMarkerRow():
-        return _TimelineMarkerLine(row: row);
+        child = _TimelineMarkerLine(row: row);
       case TurnHeaderRow():
         // Rendered separately, pinned to the visual bottom (_runningTurn).
         return const SizedBox.shrink();
       default:
         return const SizedBox.shrink();
     }
+    // The newest row streamed in while the page is open plays a one-shot
+    // fade-and-rise. The wrapper is applied unconditionally (same key) so the
+    // animation state survives streaming rebuilds; a row that is scrolled out
+    // and rebuilt sees entranceRowId null and the effect does not replay.
+    return _RowEntrance(
+      key: ValueKey('entrance-${row.rowId}'),
+      animate: entranceRowId != null && row.rowId == entranceRowId,
+      child: child,
+    );
   }
 
   // ---------- Row long-press actions (retry / edit) ----------
@@ -2793,6 +2828,61 @@ class _QueueAction extends StatelessWidget {
       tooltip: tooltip,
       onPressed: onTap,
       visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+/// One-shot fade-and-rise applied to the newest row that streams in while the
+/// conversation page is open. Kept as its own stateful widget so the entrance
+/// does not replay when the row's element is rebuilt after scrolling: such a
+/// rebuilt element is created with [animate] false and renders at full
+/// opacity — only the initial "watched it arrive" build animates.
+class _RowEntrance extends StatefulWidget {
+  const _RowEntrance({super.key, required this.animate, required this.child});
+
+  final bool animate;
+  final Widget child;
+
+  @override
+  State<_RowEntrance> createState() => _RowEntranceState();
+}
+
+class _RowEntranceState extends State<_RowEntrance>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+  late final Animation<double> _fade = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.08),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animate) {
+      _controller.forward();
+    } else {
+      _controller.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fade,
+      child: SlideTransition(position: _slide, child: widget.child),
     );
   }
 }

@@ -18,35 +18,53 @@ class ReconnectBanner extends StatelessWidget {
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) {
-        if (!app.isReconnecting) return const SizedBox.shrink();
-        return Material(
-          color: scheme.errorContainer,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: scheme.onErrorContainer,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '连接已断开，正在尝试重连…',
-                    style: TextStyle(
-                      color: scheme.onErrorContainer,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
+        // AnimatedSwitcher cross-fades between the two states; SizeTransition
+        // makes the banner roll out from under the app bar instead of
+        // popping in/out instantly.
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          transitionBuilder: (child, animation) => SizeTransition(
+            sizeFactor: animation,
+            alignment: Alignment.topCenter,
+            child: FadeTransition(opacity: animation, child: child),
+          ),
+          child: app.isReconnecting
+              ? Material(
+                  key: const ValueKey('reconnecting'),
+                  color: scheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: scheme.onErrorContainer,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '连接已断开，正在尝试重连…',
+                            style: TextStyle(
+                              color: scheme.onErrorContainer,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
+                )
+              : const SizedBox.shrink(key: ValueKey('connected')),
         );
       },
     );

@@ -1003,9 +1003,13 @@ class _SessionsPageState extends State<SessionsPage> {
                                       child: () {
                                         final color = _statusColor(s.displayStatus);
                                         if (color == null) return const SizedBox.shrink();
-                                        return Container(
+                                        return AnimatedContainer(
                                           width: 8,
                                           height: 8,
+                                          duration: const Duration(
+                                            milliseconds: 200,
+                                          ),
+                                          curve: Curves.easeOut,
                                           decoration: BoxDecoration(
                                             shape: BoxShape.circle,
                                             color: color,

@@ -307,10 +307,20 @@ class _DevicesPageState extends State<DevicesPage> {
                   widget.app.phase != BridgePhase.idle;
               return Card(
                 child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: isActive
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  leading: TweenAnimationBuilder<Color?>(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    tween: ColorTween(
+                      end: isActive
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
+                    ),
+                    builder: (context, color, child) => CircleAvatar(
+                      backgroundColor: color,
+                      child: child,
+                    ),
                     child: Icon(
                       Icons.computer,
                       color: isActive
