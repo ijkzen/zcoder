@@ -131,9 +131,15 @@ class AppController extends ChangeNotifier {
     _bridge = bridge;
 
     _phaseSub = bridge.phaseStream.listen((p) {
-      zlog('[zremote] bridge phase: $p');
+      zlog('[zremote] bridge phase -> ${p.name}');
       _phase = p;
       if (p == BridgePhase.ready) {
+        if (_bridge?.isDegraded ?? false) {
+          zlog(
+            '[zremote] phase=ready 但 bridge 仍降级 — '
+            '下方的撤销会清掉未恢复的断线通知',
+          );
+        }
         NotificationService.instance.cancelReconnectNotification();
         _startListStatusMonitor();
       } else {
@@ -154,12 +160,18 @@ class AppController extends ChangeNotifier {
     // hook; closedStream only fires on intentional disconnect, so it is not
     // subscribed here.
     _relayFailureSub = relay.failureStream.listen((f) {
+      zlog(
+        '[zremote] relay failure: ${f.reason.name} — ${f.message}',
+      );
       bridgeNotificationHook?.call(BridgeException(f.reason.name, f.message));
     });
     // Recovery completion clears the degraded flag without any phase change,
     // so re-notify here — otherwise the reconnect banner would stick around
     // after the connection is healthy again.
-    _recoveredSub = bridge.recoveredStream.listen((_) => notifyListeners());
+    _recoveredSub = bridge.recoveredStream.listen((_) {
+      zlog('[zremote] bridge recovered — 连接已恢复');
+      notifyListeners();
+    });
 
     await bridge.start();
   }
@@ -1212,6 +1224,7 @@ class AppController extends ChangeNotifier {
   // ---------- Lifecycle ----------
 
   Future<void> disconnect() async {
+    zlog('[zremote] disconnect() 主动断开连接');
     _stopListStatusMonitor();
     await _conversation?.dispose();
     _conversation = null;

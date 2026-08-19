@@ -199,6 +199,7 @@ class NotificationService {
     }
     final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     _reconnectNotifIds.add(id);
+    zlog('[notify] 断线通知: reason=${e.reason} body=$body id=$id');
     _local.show(
       id: id,
       title: '连接中断',
@@ -210,6 +211,7 @@ class NotificationService {
   /// Dismiss the current reconnect notification when the bridge recovers.
   Future<void> cancelReconnectNotification() async {
     if (_reconnectNotifIds.isEmpty) return;
+    zlog('[notify] 撤销断线通知 ${_reconnectNotifIds.length} 条');
     for (final id in _reconnectNotifIds) {
       await _local.cancel(id: id);
     }

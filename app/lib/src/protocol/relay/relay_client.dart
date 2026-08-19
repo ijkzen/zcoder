@@ -129,7 +129,9 @@ class RelayClient {
 
   void _setState(RelayState s) {
     _state = s;
-    if (!_disposed) _stateController.add(s);
+    if (_disposed) return;
+    zlog('[zremote] relay state -> ${s.name}');
+    _stateController.add(s);
   }
 
   Future<void> connect() async {
@@ -232,6 +234,7 @@ class RelayClient {
         if (code == RelayErrorCode.authFailed ||
             code == RelayErrorCode.kicked) {
           // Fatal: wrong credentials or kicked off — do not auto-reconnect.
+          zlog('[zremote] $code 视为致命 — 停止自动重连');
           _userClosed = true;
           _setState(RelayState.closed);
           _socket?.close();
@@ -272,6 +275,10 @@ class RelayClient {
     final closeCode = _socket?.closeCode;
     final closeReason = _socket?.closeReason;
     _socket = null;
+    zlog(
+      '[zremote] websocket closed: code=$closeCode reason=$closeReason '
+      'userClosed=$_userClosed disposed=$_disposed',
+    );
     if (_userClosed || _disposed) {
       _setState(RelayState.closed);
       if (!_disposed) _closedController.add(null);
@@ -316,6 +323,7 @@ class RelayClient {
   }
 
   void _onSocketError(Object error) {
+    zlog('[zremote] websocket error: $error');
     _emitFailure(RelayFailure(RelayFailureReason.other, error.toString()));
   }
 
@@ -325,6 +333,10 @@ class RelayClient {
         ? 500
         : (500 * (1 << _reconnectAttempt)).clamp(0, 10000);
     _reconnectAttempt++;
+    zlog(
+      '[zremote] scheduling reconnect attempt $_reconnectAttempt '
+      'in ${delay}ms',
+    );
     Timer(Duration(milliseconds: delay), () {
       if (!_userClosed && !_disposed) _openSocket();
     });
@@ -346,6 +358,10 @@ class RelayClient {
           const Duration(milliseconds: heartbeatTimeoutMs),
           () {
             // No pair_status_ack in time — the link is stale; force reconnect.
+            zlog(
+              '[zremote] heartbeat ${heartbeatTimeoutMs}ms 无 ack — '
+              '判定链路僵死，强制关闭 socket',
+            );
             _socket?.close();
           },
         );

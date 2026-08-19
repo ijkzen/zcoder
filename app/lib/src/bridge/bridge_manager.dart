@@ -132,6 +132,10 @@ class BridgeManager {
         // Distinguish a relay drop (we were connected and are reconnecting)
         // from the initial connect; the UI shows a reconnect banner on this
         // phase and clears it once the relay pairs again.
+        zlog(
+          '[bridge] relay reconnecting (phase was $_phase, '
+          'degraded=$_degraded)',
+        );
         _setPhase(BridgePhase.reconnecting);
         // A relay drop makes the bridge untrustworthy: gate commands and
         // run recovery once we are paired again.
@@ -415,6 +419,7 @@ class BridgeManager {
   void _finishRecovery() {
     _clearDegraded();
     _recoveryCount += 1;
+    zlog('[bridge] recovery complete (count=$_recoveryCount)');
     if (!_recoveredController.isClosed) {
       _recoveredController.add(_recoveryCount);
     }
