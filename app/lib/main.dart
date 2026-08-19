@@ -100,6 +100,11 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_checkBatteryOptimization());
     });
+    // Restore the persisted launcher-app-icon badge count and re-apply it (a
+    // process death must not drop unviewed session counts).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(widget.app.loadLauncherBadge());
+    });
   }
 
   @override
@@ -108,6 +113,13 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
     // are suppressed for the session the user is currently viewing (see
     // AppController._completionIsVisible); anything else stays eligible.
     widget.app.isForeground = state == AppLifecycleState.resumed;
+    // Launchers sometimes reset or cap the icon badge; re-apply on resume. The
+    // loaded guard avoids flashing a 0 before the persisted count is read.
+    if (state == AppLifecycleState.resumed) {
+      if (widget.app.launcherBadgeLoaded) {
+        unawaited(widget.app.applyLauncherBadge());
+      }
+    }
     // 退到后台/被杀前把缓冲日志刷到文件，减少丢日志。
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {

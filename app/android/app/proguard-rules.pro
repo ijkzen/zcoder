@@ -54,3 +54,6 @@
 
 # package_info_plus
 -keep class dev.flutter.plugins.packageinfo.** { *; }
+
+# ShortcutBadger — launcher badge (reflection-loaded per-launcher components)
+-keep class me.leolin.shortcutbadger.** { *; }

@@ -3,11 +3,14 @@ package dev.ijkzen.zcode_remote
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import me.leolin.shortcutbadger.ShortcutBadger
 
 class MainActivity : FlutterActivity() {
 
@@ -62,6 +65,31 @@ class MainActivity : FlutterActivity() {
                         )
                         startActivity(intent)
                         result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        // Launcher-app-icon badge. applyCount can be slow on some launchers, so
+        // run it off the main thread and post the result back.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.ijkzen.zcode_remote/launcher_badge")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setBadgeCount" -> {
+                        val count = call.argument<Int>("count") ?: 0
+                        Thread {
+                            var ok = false
+                            try {
+                                if (count <= 0) {
+                                    ShortcutBadger.removeCount(this@MainActivity)
+                                } else {
+                                    ShortcutBadger.applyCount(this@MainActivity, count)
+                                }
+                                ok = true
+                            } catch (_: Exception) {
+                                ok = false
+                            }
+                            Handler(Looper.getMainLooper()).post { result.success(ok) }
+                        }.start()
                     }
                     else -> result.notImplemented()
                 }

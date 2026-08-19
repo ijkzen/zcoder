@@ -1,5 +1,5 @@
-/// Local persistence: pairings (QR credentials) and the text-only cache of
-/// sessions and conversation rows.
+/// Local persistence: pairings (QR credentials), the text-only cache of
+/// sessions and conversation rows, and the launcher-badge counted-session set.
 library;
 
 import 'dart:convert';
@@ -113,7 +113,7 @@ class AppDatabase {
     final dir = await getDatabasesPath();
     _db = await openDatabase(
       p.join(dir, 'zcode_remote.db'),
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE pairings (
@@ -147,6 +147,7 @@ class AppDatabase {
         ''');
         await _createWorkspaceModelPrefs(db);
         await _createAppSettings(db);
+        await _createLauncherBadge(db);
       },
       onUpgrade: (db, from, to) async {
         if (from < 2) {
@@ -155,9 +156,20 @@ class AppDatabase {
         if (from < 3) {
           await _createAppSettings(db);
         }
+        if (from < 4) {
+          await _createLauncherBadge(db);
+        }
       },
     );
     return _db!;
+  }
+
+  static Future<void> _createLauncherBadge(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS launcher_badge (
+        session_key TEXT PRIMARY KEY
+      )
+    ''');
   }
 
   static Future<void> _createWorkspaceModelPrefs(Database db) async {
@@ -200,6 +212,32 @@ class AppDatabase {
       'key': key,
       'value': value,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  // ---------- Launcher badge (counted-but-unviewed sessions) ----------
+
+  /// Session keys (`deviceSid|taskId`) currently counted in the launcher
+  /// badge. Persisted so the count survives process death and launcher resets.
+  Future<Set<String>> launcherBadgeIds() async {
+    final db = await _database;
+    final rows = await db.query('launcher_badge');
+    return rows.map((r) => r['session_key'] as String).toSet();
+  }
+
+  Future<void> launcherBadgeAdd(String sessionKey) async {
+    final db = await _database;
+    await db.insert('launcher_badge', {
+      'session_key': sessionKey,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> launcherBadgeRemove(String sessionKey) async {
+    final db = await _database;
+    await db.delete(
+      'launcher_badge',
+      where: 'session_key = ?',
+      whereArgs: [sessionKey],
+    );
   }
 
   // ---------- Pairings ----------

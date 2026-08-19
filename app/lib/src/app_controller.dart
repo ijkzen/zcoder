@@ -13,6 +13,8 @@ import 'protocol/core/random_ids.dart' as ids;
 import 'bridge/bridge_manager.dart';
 import 'protocol/relay/relay_client.dart';
 import 'protocol/relay/relay_frame.dart';
+import 'services/launcher_badge.dart';
+import 'services/launcher_badge_ledger.dart';
 import 'services/notifications.dart';
 import 'protocol/services/services.dart';
 import 'protocol/zlog.dart';
@@ -341,8 +343,10 @@ class AppController extends ChangeNotifier {
     });
     try {
       await controller.start();
-      // Opening the session clears its unread badge (best-effort).
+      // Opening the session clears its unread badge (best-effort) and its
+      // launcher-icon badge count.
       unawaited(markTaskRead(sessionId));
+      unawaited(_clearBadgeSession(sessionId));
     } catch (e) {
       lastError = '会话打开失败: $e';
       notifyListeners();
@@ -1124,8 +1128,14 @@ class AppController extends ChangeNotifier {
   late final SessionStatusMonitor _sessionMonitor =
       SessionStatusMonitor(_notifiedTerminal);
 
+  /// One backfill of the launcher badge per connect: sessions that crossed
+  /// into a terminal state while this app was not connected (see
+  /// [_backfillLauncherBadge]).
+  bool _badgeBackfilled = false;
+
   void _startListStatusMonitor() {
     _stopListStatusMonitor();
+    _badgeBackfilled = false;
     unawaited(_pollListStatus()); // baseline immediately, then every tick
     _listStatusTimer = Timer.periodic(_listStatusInterval, (_) {
       unawaited(_pollListStatus());
@@ -1149,6 +1159,12 @@ class AppController extends ChangeNotifier {
       return; // transient — keep the snapshot and retry next tick
     }
     _emitListStatusTransitions();
+    // First successful list after (re)connect: fold in anything that already
+    // finished while this app was dead/offline, once per connection.
+    if (!_badgeBackfilled) {
+      _badgeBackfilled = true;
+      unawaited(_backfillLauncherBadge());
+    }
   }
 
   void _emitListStatusTransitions() {
@@ -1163,8 +1179,10 @@ class AppController extends ChangeNotifier {
     for (final (:taskId, :workspaceKey, :status) in _sessionMonitor.detect(fresh)) {
       // The user is watching that session's detail page — no notification
       // needed (the shared notified map already marks it, so nothing fires
-      // later either).
+      // later either); the badge likewise stays untouched because it is
+      // already on screen.
       if (_completionIsVisible(taskId)) continue;
+      unawaited(_badgeSession(taskId));
       hook({
         'type': 'phase',
         'sessionId': taskId,
@@ -1203,8 +1221,9 @@ class AppController extends ChangeNotifier {
         _notifiedTerminal[state.sessionId] != terminal) {
       _notifiedTerminal[state.sessionId] = terminal;
       // User is on this session's detail page in the foreground — the state
-      // change is already visible, so skip the notification.
+      // change is already visible, so skip the notification (and the badge).
       if (_completionIsVisible(state.sessionId)) return;
+      unawaited(_badgeSession(state.sessionId));
       hook({
         'type': 'phase',
         'sessionId': state.sessionId,
@@ -1213,6 +1232,94 @@ class AppController extends ChangeNotifier {
         'phase': phase,
       });
     }
+  }
+
+  // ---------- Launcher badge (unviewed terminal-state sessions) ----------
+
+  /// Counted session keys (`deviceSid|taskId`), mirrored into the
+  /// `launcher_badge` table so the count survives process death.
+  final LauncherBadgeLedger _badges = LauncherBadgeLedger();
+  bool _badgeLoaded = false;
+
+  /// One session in the badge ledger, disambiguated across pairings.
+  static String _badgeKey(String deviceSid, String taskId) =>
+      '$deviceSid|$taskId';
+
+  /// Loads the persisted counted-session set and applies the badge. Once per
+  /// controller lifetime.
+  Future<void> loadLauncherBadge() async {
+    if (_badgeLoaded) return;
+    _badgeLoaded = true;
+    try {
+      _badges.reset(await db.launcherBadgeIds());
+    } catch (e) {
+      zlog('[badge] 读取角标状态失败: $e');
+    }
+    await applyLauncherBadge();
+  }
+
+  /// Whether the persisted badge state has been loaded from the DB (startup).
+  bool get launcherBadgeLoaded => _badgeLoaded;
+
+  /// Pushes the current count to the launcher. Re-invoked on resume so a
+  /// launcher that reset or capped the badge is brought back in sync.
+  Future<void> applyLauncherBadge() =>
+      LauncherBadge.instance.setCount(_badges.count);
+
+  /// Counts a session on a terminal-state crossing — one point per session
+  /// until it is opened ([openSession] → [_clearBadgeSession]). Idempotent
+  /// across the list poll, the detail poll, and reconnect backfills.
+  Future<void> _badgeSession(String taskId) async {
+    final deviceSid = activePairing?.deviceSid;
+    if (deviceSid == null) return;
+    final key = _badgeKey(deviceSid, taskId);
+    if (!_badges.add(key)) return;
+    try {
+      await db.launcherBadgeAdd(key);
+    } catch (e) {
+      zlog('[badge] 写入角标计数失败: $e');
+    }
+    await applyLauncherBadge();
+  }
+
+  /// Drops a session from the badge when it is opened (viewed).
+  Future<void> _clearBadgeSession(String taskId) async {
+    final deviceSid = activePairing?.deviceSid;
+    if (deviceSid == null) return;
+    final key = _badgeKey(deviceSid, taskId);
+    if (!_badges.remove(key)) return;
+    try {
+      await db.launcherBadgeRemove(key);
+    } catch (e) {
+      zlog('[badge] 清除角标计数失败: $e');
+    }
+    await applyLauncherBadge();
+  }
+
+  /// Folds into the badge the sessions that crossed into a terminal state
+  /// while this app was not connected (process killed / offline). The
+  /// desktop's own `unreadAt` marks the change as unseen; sessions already
+  /// counted are skipped.
+  Future<void> _backfillLauncherBadge() async {
+    await loadLauncherBadge();
+    final deviceSid = activePairing?.deviceSid;
+    if (deviceSid == null) return;
+    var changed = false;
+    for (final w in _workspaces) {
+      final taskId = w.taskId;
+      if (taskId == null || w.archived) continue;
+      if (normalizeTerminalStatus(w.displayStatus) == null) continue;
+      if (w.unreadAt == null) continue;
+      final key = _badgeKey(deviceSid, taskId);
+      if (!_badges.add(key)) continue;
+      try {
+        await db.launcherBadgeAdd(key);
+      } catch (e) {
+        zlog('[badge] 补计角标失败: $e');
+      }
+      changed = true;
+    }
+    if (changed) await applyLauncherBadge();
   }
 
   // ---------- Offline cache (ADR-0002: text only) ----------

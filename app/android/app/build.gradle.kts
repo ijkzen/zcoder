@@ -96,4 +96,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Launcher-app-icon numeric badge (Samsung/MIUI/OPPO/vivo/…; safe no-op on
+    // unsupported launchers like the AOSP one).
+    implementation("me.leolin:ShortcutBadger:1.1.22")
 }
