@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../protocol/relay/relay_frame.dart';
+import '../protocol/zlog.dart';
 
 /// Full-screen QR scanner styled after WeChat's 扫一扫: darkened camera view
 /// with a rounded-square cutout, green corner brackets, a sweeping scan line,
@@ -311,7 +312,7 @@ class _ScanPageState extends State<ScanPage>
     try {
       await channel.invokeMethod('openAppSettings');
     } on PlatformException catch (e) {
-      debugPrint('[scan] 打开设置失败: $e');
+      zlog('[scan] 打开设置失败: $e');
     }
   }
 }

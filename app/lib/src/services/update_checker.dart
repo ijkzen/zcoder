@@ -9,10 +9,11 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+
+import '../protocol/zlog.dart';
 
 /// Which releases to consider when checking for updates.
 enum UpdateChannel {
@@ -222,7 +223,7 @@ class UpdateChecker {
     UpdateChannel channel = UpdateChannel.stable,
   }) async {
     final url = Uri.parse('$_apiBase/repos/$owner/$repo/releases');
-    debugPrint('[UpdateChecker] GET $url');
+    zlog('[UpdateChecker] GET $url');
     final response = await http.get(
       url,
       headers: {
@@ -365,11 +366,11 @@ class UpdateChecker {
     try {
       final result = await _platform.invokeMethod<List>('getSupportedAbis');
       if (result != null && result.isNotEmpty) {
-        debugPrint('[UpdateChecker] Device ABIs: $result');
+        zlog('[UpdateChecker] Device ABIs: $result');
         return result.cast<String>();
       }
     } catch (e) {
-      debugPrint('[UpdateChecker] Failed to get ABIs: $e');
+      zlog('[UpdateChecker] Failed to get ABIs: $e');
     }
     return ['arm64-v8a'];
   }
@@ -406,7 +407,7 @@ class UpdateChecker {
       try {
         return await _downloadFrom(url, name, asset, file, onProgress, onSource);
       } catch (e) {
-        debugPrint('[UpdateChecker] $name 失败: $e');
+        zlog('[UpdateChecker] $name 失败: $e');
         // Truncate/remove any partial bytes; the next attempt rewrites it.
         try {
           await file.delete();
@@ -451,7 +452,7 @@ class UpdateChecker {
   ) async {
     final label = '通过 ${name ?? '官方直连'} ';
     onSource?.call(name ?? '官方直连');
-    debugPrint('[UpdateChecker] 开始$label下载 $url');
+    zlog('[UpdateChecker] 开始$label下载 $url');
     final request = http.Request('GET', Uri.parse(url));
     final client = http.Client();
     try {
@@ -472,7 +473,7 @@ class UpdateChecker {
       } finally {
         await sink.close();
       }
-      debugPrint('[UpdateChecker] $label下载完成 ($received bytes)');
+      zlog('[UpdateChecker] $label下载完成 ($received bytes)');
       return file.path;
     } finally {
       client.close();

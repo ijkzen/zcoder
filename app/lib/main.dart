@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart'
+    show FlutterError, PlatformDispatcher, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/app_controller.dart';
+import 'src/protocol/log_file.dart';
 import 'src/protocol/zlog.dart';
 import 'src/services/app_version.dart';
 import 'src/services/notifications.dart';
@@ -15,13 +18,43 @@ import 'src/ui/settings_page.dart';
 import 'src/ui/theme.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  runZonedGuarded(() async {
+    // 必须和 runApp 在同一 zone 里初始化，否则 binding 报 Zone mismatch。
+    WidgetsFlutterBinding.ensureInitialized();
+    _installLogHandlers();
+    await AppLogFile.instance.init(header: await _logHeader());
 
-  final app = AppController();
-  await app.loadPairings();
-  await NotificationService.instance.init(app);
+    final app = AppController();
+    await app.loadPairings();
+    await NotificationService.instance.init(app);
 
-  runApp(ZcodeRemoteApp(app: app));
+    runApp(ZcodeRemoteApp(app: app));
+  }, (error, stack) {
+    AppLogFile.instance.writeLine('[FATAL (zone)] $error\n$stack');
+  });
+}
+
+/// 日志文件启动头：版本 + 机型 + 时间（时间由 AppLogFile 写入时补）。
+Future<String> _logHeader() async {
+  final version = await currentAppVersion();
+  final model = await deviceModel();
+  return '== 启动 ${version == null ? 'v?' : 'v$version'}'
+      ' / ${model ?? '?'} ==';
+}
+
+/// 把未捕获异常/崩溃也写进日志文件，方便后续排查。
+void _installLogHandlers() {
+  final previousOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    AppLogFile.instance
+        .writeLine('[FlutterError] ${details.exception}\n${details.stack}');
+    // 开发期保留默认控制台输出，方便本地肉眼排查。
+    if (kDebugMode && previousOnError != null) previousOnError(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    AppLogFile.instance.writeLine('[Uncaught] $error\n$stack');
+    return true;
+  };
 }
 
 class ZcodeRemoteApp extends StatefulWidget {
@@ -69,6 +102,11 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
     // are suppressed for the session the user is currently viewing (see
     // AppController._completionIsVisible); anything else stays eligible.
     widget.app.isForeground = state == AppLifecycleState.resumed;
+    // 退到后台/被杀前把缓冲日志刷到文件，减少丢日志。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(AppLogFile.instance.flush());
+    }
   }
 
   Future<void> _silentCheckForUpdates() async {

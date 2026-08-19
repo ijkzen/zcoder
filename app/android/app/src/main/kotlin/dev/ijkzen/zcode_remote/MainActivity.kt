@@ -24,6 +24,8 @@ class MainActivity : FlutterActivity() {
                         val info = packageManager.getPackageInfo(packageName, 0)
                         result.success(info.versionName ?: "")
                     }
+                    "getDeviceModel" ->
+                        result.success(Build.MODEL)
                     "openAppSettings" -> {
                         // 等价于 permission_handler 的 openAppSettings：跳转本应用
                         // 的系统设置详情页，供被拒权限（如相机）手动授予。

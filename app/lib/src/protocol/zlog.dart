@@ -1,12 +1,16 @@
 /// App-wide protocol log.
 ///
 /// Every zlog line lands in an in-memory ring buffer, shown by the protocol
-/// log page (works in any build). When the app is built with
-/// `--dart-define=ZREMOTE_LOG=true` the same line also goes through `print()`
-/// (which reaches logcat in every build mode) for field debugging.
+/// log page (works in any build). The same line is also appended to the daily
+/// on-disk log file (see [AppLogFile]) so history survives restarts and can be
+/// pulled via adb. When the app is built with `--dart-define=ZREMOTE_LOG=true`
+/// it additionally goes through `print()` (which reaches logcat in every build
+/// mode) for field debugging.
 library;
 
 import 'dart:async';
+
+import 'log_file.dart';
 
 const bool zremoteLogEnabled = bool.fromEnvironment('ZREMOTE_LOG');
 
@@ -45,6 +49,7 @@ class ProtocolLog {
 
 void zlog(String message) {
   ProtocolLog.instance.add(message);
+  AppLogFile.instance.writeLine(message);
   if (zremoteLogEnabled) {
     // ignore: avoid_print
     print('[zremote] $message');

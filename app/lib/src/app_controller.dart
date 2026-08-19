@@ -7,7 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint;
+import 'package:flutter/foundation.dart' show ChangeNotifier;
 
 import 'protocol/core/random_ids.dart' as ids;
 import 'bridge/bridge_manager.dart';
@@ -131,7 +131,7 @@ class AppController extends ChangeNotifier {
     _bridge = bridge;
 
     _phaseSub = bridge.phaseStream.listen((p) {
-      debugPrint('[zremote] bridge phase: $p');
+      zlog('[zremote] bridge phase: $p');
       _phase = p;
       if (p == BridgePhase.ready) {
         NotificationService.instance.cancelReconnectNotification();
@@ -260,7 +260,7 @@ class AppController extends ChangeNotifier {
     try {
       await service.setTaskUnread(taskId, unread: false);
     } catch (e) {
-      debugPrint('[zremote] markTaskRead failed: $e');
+      zlog('[zremote] markTaskRead failed: $e');
     }
   }
 
@@ -828,7 +828,7 @@ class AppController extends ChangeNotifier {
     // The RPC returning OK only means the host accepted the frame — the
     // command result carries status/result.type (e.g. accepted+createSession
     // with the new sessionId, or a fault). Log it so silent drops are visible.
-    debugPrint('[zremote] createSession result: $result');
+    zlog('[zremote] createSession result: $result');
     return extractSessionIdFromResult(result);
   }
 
