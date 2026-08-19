@@ -10,6 +10,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../services/app_version.dart';
+import '../services/battery_optimization.dart';
 import '../services/update_checker.dart';
 import '../storage/app_database.dart';
 
@@ -31,12 +32,24 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 本机实际安装版本（从安卓包 versionName 动态读取，见 app_version.dart）。
   String? _appVersion;
 
+  /// 电池优化豁免状态（null = 加载中）。
+  bool? _batteryExempt;
+
+  /// 设备厂商（null = 加载中）。
+  String? _manufacturer;
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
     currentAppVersion().then((version) {
       if (mounted) setState(() => _appVersion = version);
+    });
+    isIgnoringBatteryOptimizations().then((exempt) {
+      if (mounted) setState(() => _batteryExempt = exempt);
+    });
+    deviceManufacturer().then((m) {
+      if (mounted) setState(() => _manufacturer = m);
     });
   }
 
@@ -140,6 +153,34 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Center(child: CircularProgressIndicator()),
             )
           else ...[
+            // ---------- 后台保活 ----------
+            _SectionHeader(title: '后台保活'),
+            ListTile(
+              leading: const Icon(Icons.battery_saver),
+              title: const Text('电池优化'),
+              trailing: Text(
+                _batteryExempt == null
+                    ? '检测中…'
+                    : (_batteryExempt! ? '已优化 ✓' : '未优化 ⚠'),
+                style: TextStyle(
+                  color: _batteryExempt == null
+                      ? null
+                      : (_batteryExempt! ? scheme.primary : scheme.error),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.phone_android),
+              title: const Text('厂商适配指南'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => showDialog<void>(
+                context: context,
+                builder: (_) => _BatteryGuideDialog(
+                  manufacturer: _manufacturer,
+                ),
+              ),
+            ),
+            const Divider(height: 32),
             // ---------- 更新检查 ----------
             _SectionHeader(title: '应用更新'),
             ListTile(
@@ -474,5 +515,102 @@ class _DownloadProgressDialogState extends State<_DownloadProgressDialog> {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
     return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+}
+
+/// Dialog showing device-specific battery optimization guide.
+class _BatteryGuideDialog extends StatelessWidget {
+  final String? manufacturer;
+  const _BatteryGuideDialog({this.manufacturer});
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = _stepsFor(manufacturer);
+    return AlertDialog(
+      title: const Text('后台保活设置'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '厂商: ${manufacturer ?? "未知"}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              for (var i = 0; i < steps.length; i++) ...[
+                Text('${i + 1}. ${steps[i]}'),
+                if (i < steps.length - 1) const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+        FilledButton.icon(
+          onPressed: () {
+            Navigator.of(context).pop();
+            openBatteryOptimizationSettings();
+          },
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('打开应用设置'),
+        ),
+      ],
+    );
+  }
+
+  List<String> _stepsFor(String? m) {
+    if (m == 'xiaomi' || m == 'redmi') {
+      return [
+        '打开手机「设置」→「应用设置」→「应用管理」',
+        '搜索或找到「ZCode 远程」并点击进入',
+        '点击「省电策略」→ 选择「无限制」',
+        '返回，找到「自启动」→ 开启',
+        '返回，找到「后台运行」→ 开启',
+      ];
+    }
+    if (m == 'huawei' || m == 'honor') {
+      return [
+        '打开手机「设置」→「应用和服务」→「应用管理」',
+        '找到「ZCode 远程」→「耗电详情」',
+        '关闭「应用启动管理」的自动管理，改为手动管理：开启「自启动」「关联启动」「后台活动」',
+        '返回，点击「电池」→ 选择「不受限制」',
+      ];
+    }
+    if (m == 'oppo' || m == 'oneplus' || m == 'realme') {
+      return [
+        '打开手机「设置」→「应用管理」→「应用列表」',
+        '找到「ZCode 远程」→「耗电管理」→ 选择「允许后台运行」',
+        '返回，点击「省电优化」→ 选择「不优化」',
+        '打开「手机管家」→「自启动管理」→ 开启「ZCode 远程」',
+      ];
+    }
+    if (m == 'vivo' || m == 'iqoo') {
+      return [
+        '打开手机「设置」→「应用与权限」→「应用管理」',
+        '找到「ZCode 远程」→「省电策略」→ 选择「无限制」',
+        '返回，点击「权限管理」→「自启动」→ 开启',
+      ];
+    }
+    if (m == 'samsung') {
+      return [
+        '打开手机「设置」→「电池和设备维护」→「电池」',
+        '点击「后台使用限制」→ 将「ZCode 远程」从「深度优化」列表移除',
+        '或：「设置」→「应用」→「ZCode 远程」→「电池」→ 选择「不受限制」',
+      ];
+    }
+    // Generic fallback.
+    return [
+      '打开手机「设置」→「应用管理」→ 找到「ZCode 迩程」',
+      '找到「电池」或「省电」相关选项',
+      '将优化策略改为「不受限制」或「无限制」',
+      '如有机型专属的「自启动」「后台运行」开关，请一并开启',
+    ];
   }
 }

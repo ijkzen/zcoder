@@ -9,6 +9,7 @@ import 'src/app_controller.dart';
 import 'src/protocol/log_file.dart';
 import 'src/protocol/zlog.dart';
 import 'src/services/app_version.dart';
+import 'src/services/battery_optimization.dart';
 import 'src/services/notifications.dart';
 import 'src/services/update_checker.dart';
 import 'src/storage/app_database.dart';
@@ -94,6 +95,11 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_silentCheckForUpdates());
     });
+    // Battery optimization check: if the user has saved pairings but is not
+    // exempt, show a one-time dialog nudging them to grant the exemption.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_checkBatteryOptimization());
+    });
   }
 
   @override
@@ -143,6 +149,41 @@ class _ZcodeRemoteAppState extends State<ZcodeRemoteApp>
       }
     } catch (_) {
       // Silent: startup check failures should never interrupt the user.
+    }
+  }
+
+  Future<void> _checkBatteryOptimization() async {
+    try {
+      // Only prompt when the user has at least one saved pairing (i.e. has
+      // connected before). First-time users without pairings don't need this.
+      if (widget.app.pairings.isEmpty) return;
+      final exempt = await isIgnoringBatteryOptimizations();
+      if (exempt || !mounted) return;
+      final shouldOpen = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('保持后台连接'),
+          content: const Text(
+            '检测到电池优化未关闭，后台连接可能会中断。'
+            '建议关闭电池优化以保持与桌面端的稳定连接。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('稍后再说'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('去设置'),
+            ),
+          ],
+        ),
+      );
+      if (shouldOpen == true) {
+        await openBatteryOptimizationSettings();
+      }
+    } catch (_) {
+      // Silent: battery check failures should never interrupt the user.
     }
   }
 

@@ -136,11 +136,9 @@ class AppController extends ChangeNotifier {
       if (p == BridgePhase.ready) {
         if (_bridge?.isDegraded ?? false) {
           zlog(
-            '[zremote] phase=ready 但 bridge 仍降级 — '
-            '下方的撤销会清掉未恢复的断线通知',
+            '[zremote] phase=ready 但 bridge 仍降级',
           );
         }
-        NotificationService.instance.cancelReconnectNotification();
         _startListStatusMonitor();
       } else {
         _stopListStatusMonitor();
@@ -170,6 +168,7 @@ class AppController extends ChangeNotifier {
     // after the connection is healthy again.
     _recoveredSub = bridge.recoveredStream.listen((_) {
       zlog('[zremote] bridge recovered — 连接已恢复');
+      NotificationService.instance.cancelReconnectNotification();
       notifyListeners();
     });
 
@@ -1225,6 +1224,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> disconnect() async {
     zlog('[zremote] disconnect() 主动断开连接');
+    NotificationService.instance.cancelReconnectNotification();
     _stopListStatusMonitor();
     await _conversation?.dispose();
     _conversation = null;

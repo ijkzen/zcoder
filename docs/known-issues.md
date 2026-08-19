@@ -5,7 +5,18 @@
 >
 > 修订：2026-08-19 初版，来源为 8 月 19 日会话排查（用户实测复现）。
 
-## 问题 1：后台断连时不发「连接中断」通知（通知被过早撤销）★待修
+## 问题 1：后台断连时不发「连接中断」通知（通知被过早撤销）★已修复（2026-08-19）
+
+> **根因实证**：reproduce 日志证实通知弹出后仅 931ms 即被撤销（`22:54:47.397 弹出 → 22:54:48.328 撤销`），
+> 原因是 `cancelReconnectNotification()` 挂在 `BridgePhase.ready`——relay 秒级重连配对即触发 ready，
+> 而 bridge 此时仍 degraded（reconnect-request 要等 15s 超时后才 reopen bridge）。
+
+**修复**：将 `cancelReconnectNotification()` 从 `phase=ready` 移至：
+- `recoveredStream`（bridge 真正恢复完成时）
+- `disconnect()`（用户主动断开时）
+
+改动：`app_controller.dart` — ready 分支不再调用 cancel；recoveredStream 与 disconnect 补上。
+顺带修了次级 bug：`bridge-degraded` 路径恢复后通知残留（现已由 recoveredStream 统一清除）。
 
 **症状**：连接断开时（尤其是 App 处于后台），用户收不到系统通知；回到前台才在 App 内看到
 「连接已断开，正在尝试重连…」横幅。UI 契约 TC-GLOB-004 要求按原因弹出断连通知，此处未满足。
@@ -28,9 +39,9 @@
 「连接中断」通知会残留。
 
 **候选方案**：
-- 把「取消断线通知」从 `BridgePhase.ready` 改为真正的健康信号：`recoveredStream`（恢复完成）与
+- ✅ 已实施：把「取消断线通知」从 `BridgePhase.ready` 改为真正的健康信号：`recoveredStream`（恢复完成）与
   手动 `disconnect()` 时取消；`ready` 时若 `isDegraded` 仍为真则**不取消**。
-- 断线通知改为更高重要度（`_channelQuiet` 目前是 `defaultImportance`/无声音无 heads-up，
+- 待评估：断线通知改为更高重要度（`_channelQuiet` 目前是 `defaultImportance`/无声音无 heads-up，
   `notifications.dart:35`），因为它语义上就是后台提醒。
 
 ## 问题 2：App 一进后台就稳定断连 ★待修（主要依赖系统层豁免）
@@ -103,7 +114,7 @@
 | bridge 重连上下文 | `bridge_manager.dart` `_onRelayState` | `relay reconnecting` | ready/degraded 与重连的关系 |
 | bridge 恢复完成 | `bridge_manager.dart` `_finishRecovery` | `recovery complete` | 问题 1：恢复点 vs 通知撤销点 |
 | 桥相位（zlog 化，原 debugPrint） | `app_controller.dart` `_phaseSub` | `bridge phase ->` | 全生命线主坐标 |
-| ready 仍降级告警 | `app_controller.dart` `_phaseSub` | `仍降级` | 问题 1：取消通知的瞬间 bridge 是否健康 |
+| ready 仍降级（信息） | `app_controller.dart` `_phaseSub` | `仍降级` | relay 重配对时 bridge 是否仍降级（不再触发取消） |
 | relay 失败原因 | `app_controller.dart` `_relayFailureSub` | `relay failure:` | failure→通知 的映射 |
 | 恢复完成（UI 层） | `app_controller.dart` `_recoveredSub` | `bridge recovered` | 问题 1：恢复未取消通知的反向残留 |
 | 主动断开 | `app_controller.dart` `disconnect()` | `disconnect() 主动断开` | 区分用户手动断开 vs 被动掉线 |
