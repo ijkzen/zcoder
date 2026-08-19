@@ -48,6 +48,7 @@ class NotificationService {
   bool _initialized = false;
   bool _suppressNext = false;
   final Set<int> _reconnectNotifIds = {};
+  bool _foregroundTaskRunning = false;
 
   /// Init must run before runApp. [app] may be null in tests.
   Future<void> init(AppController? app) async {
@@ -88,13 +89,27 @@ class NotificationService {
       app.bridgeNotificationHook = _handleBridgeEvent;
     }
 
-    // The foreground task itself holds the connection; starting it begins the
-    // Android foreground service that keeps the process (and WebSocket) alive.
+    // The foreground task holds the connection, but it is NOT started here:
+    // merely opening the app must not raise the persistent "保持与桌面端的连接"
+    // notification. It starts lazily after a pairing actually succeeds
+    // (see AppController) and stops on disconnect / terminal failure.
     FlutterForegroundTask.initCommunicationPort();
-    _startForegroundTask();
+    // A fresh launch has no connection yet, so a service that auto-restarted
+    // after the process was killed is stale — drop it here; the next
+    // successful pairing re-starts it.
+    _foregroundTaskRunning = await FlutterForegroundTask.isRunningService;
+    if (_foregroundTaskRunning) {
+      await stopForegroundTask();
+    }
   }
 
-  Future<void> _startForegroundTask() async {
+  /// Starts the Android foreground service that keeps an established
+  /// connection (and its WebSocket) alive in the background. Must be called
+  /// only after a pairing has actually succeeded — with no connected desktop
+  /// there is nothing to keep alive, and a failed connect must not raise the
+  /// notification. No-op when the service is already running.
+  Future<void> startForegroundTask() async {
+    if (_foregroundTaskRunning) return;
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'zcode_remote_fgs',
@@ -112,11 +127,17 @@ class NotificationService {
         allowAutoRestart: true,
       ),
     );
-    await FlutterForegroundTask.startService(
+    final result = await FlutterForegroundTask.startService(
       serviceTypes: [ForegroundServiceTypes.dataSync],
       notificationTitle: 'ZCode 远程',
       notificationText: '保持与桌面端的连接',
     );
+    if (result is ServiceRequestSuccess) {
+      _foregroundTaskRunning = true;
+      zlog('[zremote] 前台服务已启动');
+    } else if (result is ServiceRequestFailure) {
+      zlog('[zremote] 前台服务启动失败：${result.error}');
+    }
   }
 
   /// Session label for notification bodies — the task title when known
@@ -222,7 +243,17 @@ class NotificationService {
   /// user already sees it).
   void suppressNext() => _suppressNext = true;
 
+  /// Stops the foreground service. No-op when it is not running. The running
+  /// flag is cleared even if the platform reports an error — the service may
+  /// have already been stopped by the system.
   Future<void> stopForegroundTask() async {
-    await FlutterForegroundTask.stopService();
+    if (!_foregroundTaskRunning) return;
+    _foregroundTaskRunning = false;
+    final result = await FlutterForegroundTask.stopService();
+    if (result is ServiceRequestSuccess) {
+      zlog('[zremote] 前台服务已停止');
+    } else if (result is ServiceRequestFailure) {
+      zlog('[zremote] 前台服务已停止（或已被系统停止）：${result.error}');
+    }
   }
 }

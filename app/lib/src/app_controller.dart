@@ -94,6 +94,11 @@ class AppController extends ChangeNotifier {
   BridgePhase _phase = BridgePhase.idle;
   BridgePhase get phase => _phase;
 
+  /// The foreground service runs only while a live pairing exists (it keeps
+  /// the relay WebSocket alive in the background). Set on the first
+  /// successful pairing; cleared on disconnect or terminal failure.
+  bool _foregroundTaskStarted = false;
+
   RelayClient? _relay;
   BridgeManager? _bridge;
   BridgeManager? get bridge => _bridge;
@@ -133,6 +138,17 @@ class AppController extends ChangeNotifier {
     _phaseSub = bridge.phaseStream.listen((p) {
       zlog('[zremote] bridge phase -> ${p.name}');
       _phase = p;
+      // The foreground service exists to keep a live connection alive in the
+      // background, so it starts only once a pairing actually succeeds — a
+      // failed connect (desktop offline, relay unreachable, …) never reaches
+      // `pairing` and therefore never raises the persistent notification. A
+      // later relay drop (`reconnecting`) keeps it running so the background
+      // retry loop can bring the link back; a terminal `failed` stops it.
+      if (p == BridgePhase.pairing) {
+        unawaited(_startForegroundTask());
+      } else if (p == BridgePhase.failed) {
+        unawaited(_stopForegroundTask());
+      }
       if (p == BridgePhase.ready) {
         if (_bridge?.isDegraded ?? false) {
           zlog(
@@ -173,6 +189,21 @@ class AppController extends ChangeNotifier {
     });
 
     await bridge.start();
+  }
+
+  /// Starts the foreground service the first time a pairing succeeds. Both
+  /// start/stop are guarded by [_foregroundTaskStarted] so reconnect/recovery
+  /// cycles do not flap the service.
+  Future<void> _startForegroundTask() async {
+    if (_foregroundTaskStarted) return;
+    _foregroundTaskStarted = true;
+    await NotificationService.instance.startForegroundTask();
+  }
+
+  Future<void> _stopForegroundTask() async {
+    if (!_foregroundTaskStarted) return;
+    _foregroundTaskStarted = false;
+    await NotificationService.instance.stopForegroundTask();
   }
 
   /// Selects a workspace (opens the bridge) and refreshes the session list.
@@ -1225,6 +1256,7 @@ class AppController extends ChangeNotifier {
   Future<void> disconnect() async {
     zlog('[zremote] disconnect() 主动断开连接');
     NotificationService.instance.cancelReconnectNotification();
+    await _stopForegroundTask();
     _stopListStatusMonitor();
     await _conversation?.dispose();
     _conversation = null;
