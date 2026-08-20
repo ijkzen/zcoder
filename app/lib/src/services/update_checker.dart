@@ -391,12 +391,13 @@ class UpdateChecker {
   /// directly; [UpdateMirror.auto] tries every accelerator in order then falls
   /// back to the official URL; a specific accelerator tries that mirror then
   /// the official URL. A stalled candidate (no first byte, or no progress for
-  /// a while) is abandoned in favor of the next one.
+  /// a while) is abandoned in favor of the next one. Defaults to
+  /// [UpdateMirror.auto] — the recommended multi-mirror chain.
   ///
   /// Returns the path to the downloaded file.
   Future<String> downloadApk(
     AssetInfo asset, {
-    UpdateMirror mirror = UpdateMirror.official,
+    UpdateMirror mirror = UpdateMirror.auto,
     void Function(double progress)? onProgress,
     void Function(String source)? onSource,
   }) async {
