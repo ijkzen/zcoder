@@ -137,13 +137,38 @@ class _ConversationPageState extends State<ConversationPage> {
 
   Timer? _olderDebounce;
 
+  /// 上行拉取更早记录进行中——列表顶部显示加载动画，避免用户翻不到底时
+  /// 误以为「往上拉就拉不动了」。
+  bool _loadingOlder = false;
+
+  /// 已拉到最早一条记录（loadOlderRows 返回 hasMore=false 后置位）——顶部
+  /// 显示到头标记，提示没有更早的消息了。
+  bool _olderEndReached = false;
+
+  bool get _showOlderHeader => _loadingOlder || _olderEndReached;
+
   void _maybeLoadOlder() {
     final state = _state;
-    if (state == null || !state.needsOlderRows) return;
+    if (state == null || !state.needsOlderRows || _loadingOlder) return;
     _olderDebounce ??= Timer(const Duration(milliseconds: 400), () async {
       _olderDebounce = null;
-      await widget.app.conversation?.loadOlderRows();
+      await _loadOlderRows();
     });
+  }
+
+  Future<void> _loadOlderRows() async {
+    if (_loadingOlder) return;
+    setState(() => _loadingOlder = true);
+    try {
+      await widget.app.conversation?.loadOlderRows();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingOlder = false;
+          if (!(_state?.needsOlderRows ?? false)) _olderEndReached = true;
+        });
+      }
+    }
   }
 
   @override
@@ -468,11 +493,24 @@ class _ConversationPageState extends State<ConversationPage> {
                             controller: _scrollController,
                             reverse: true,
                             padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                            itemCount: rows.length + extraStatusRow,
+                            itemCount:
+                                rows.length +
+                                extraStatusRow +
+                                (_showOlderHeader ? 1 : 0),
                             itemBuilder: (context, i) {
                               // Reversed: index 0 is the visual bottom. The
                               // running-turn status line pins there, below the
                               // newest message; real rows shift up by one.
+                              // The oldest side (visual top) hosts the
+                              // older-rows loading / end-of-history header.
+                              if (_showOlderHeader &&
+                                  i == rows.length + extraStatusRow) {
+                                return OlderRowsHeader(
+                                  key: const ValueKey('older-rows-header'),
+                                  loading: _loadingOlder,
+                                  reachedEnd: _olderEndReached,
+                                );
+                              }
                               if (runningTurn != null && i == 0) {
                                 return _TurnStatusLine(
                                   key: ValueKey('turn-${runningTurn.rowId}'),
@@ -1713,6 +1751,60 @@ class _AttachmentThumbState extends State<_AttachmentThumb> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Top-of-list (oldest side) history-loading header. While the older-rows RPC
+/// is in flight a spinner plus hint fills the silent gap (otherwise pulling to
+/// the top feels like the list is stuck); once the earliest record is reached
+/// it switches to an end-of-history marker. Public so it can be widget-tested
+/// independently of the full conversation page.
+class OlderRowsHeader extends StatelessWidget {
+  final bool loading;
+  final bool reachedEnd;
+
+  const OlderRowsHeader({
+    super.key,
+    required this.loading,
+    required this.reachedEnd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: loading
+            ? Row(
+                key: const ValueKey('older-loading'),
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('正在加载更早记录…', style: style),
+                ],
+              )
+            : reachedEnd
+                ? Text(
+                    '已加载全部历史记录',
+                    key: const ValueKey('older-end'),
+                    style: style,
+                  )
+                : const SizedBox.shrink(key: ValueKey('older-idle')),
       ),
     );
   }
