@@ -319,6 +319,30 @@ class ConversationState {
   }
 }
 
+/// Folds the two rows one sub-agent occupies in the conversation stream: a
+/// `Task` tool-call row (the spawn) plus a `subagent` row whose
+/// `parentToolCallId` points at it (doc 05 §Conversation rows — both are
+/// always emitted). Rendering keeps the tool line (it carries the input/
+/// output/error the summary mostly duplicates) and skips the sub-agent row;
+/// a pair whose parent id is missing or outside the loaded window falls back
+/// to showing both rows.
+Set<int> foldedSubagentRowIds(Iterable<ConversationRow> rows) {
+  final taskByToolCallId = <String, int>{};
+  for (final r in rows) {
+    if (r is ToolCallRow && r.toolName == 'Task' && r.toolCallId.isNotEmpty) {
+      taskByToolCallId[r.toolCallId] = r.rowId;
+    }
+  }
+  final folded = <int>{};
+  for (final r in rows) {
+    if (r is SubagentRow && r.parentToolCallId.isNotEmpty) {
+      final taskRowId = taskByToolCallId[r.parentToolCallId];
+      if (taskRowId != null) folded.add(r.rowId);
+    }
+  }
+  return folded;
+}
+
 /// Owns the subscription to one conversation topic, applies topic frames
 /// (snapshot + deltas with gap recovery), and runs the fallback polls.
 class ConversationController {

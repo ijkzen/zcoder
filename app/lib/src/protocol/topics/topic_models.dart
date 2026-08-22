@@ -575,6 +575,10 @@ class SubagentRow extends ConversationRow {
   final String subagentType;
   final String status; // running | success | error
   final String summaryText;
+  /// The Task tool-call row that spawned this sub-agent. Rendering folds the
+  /// two rows into one (the tool line carries the input/output the summary
+  /// duplicates), so this id pairs them up.
+  final String parentToolCallId;
   final Map<String, Object?> raw;
   const SubagentRow({
     required super.rowId,
@@ -584,6 +588,7 @@ class SubagentRow extends ConversationRow {
     this.subagentType = '',
     this.status = '',
     this.summaryText = '',
+    this.parentToolCallId = '',
     required this.raw,
   });
   factory SubagentRow.fromJson(
@@ -601,6 +606,7 @@ class SubagentRow extends ConversationRow {
     status: json['status']?.toString() ?? '',
     summaryText:
         json['summaryText']?.toString() ?? json['summary']?.toString() ?? '',
+    parentToolCallId: json['parentToolCallId']?.toString() ?? '',
     raw: json,
   );
 

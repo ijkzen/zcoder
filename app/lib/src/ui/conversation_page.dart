@@ -478,6 +478,15 @@ class _ConversationPageState extends State<ConversationPage> {
             _enteredRowIds.addAll(rows.map((r) => r.rowId));
             if (_atBottom && newestRowId != null) _jumpToBottom();
           }
+          // 子代理在会话流里占两行（Task 工具行 + subagent 摘要行，doc 05 两
+          // 者都会发射）：渲染时跳过摘要行，只留工具行（输入/输出/错误详情、
+          // 运行状态都在其上）——折叠配对见 foldedSubagentRowIds；配对失败
+          // （parentToolCallId 缺失或配对行在加载窗口外）回退为两行都显示。
+          final foldedSubagent = foldedSubagentRowIds(rows);
+          final renderRows = [
+            for (final r in rows)
+              if (!foldedSubagent.contains(r.rowId)) r,
+          ];
           final extraStatusRow = runningTurn != null ? 1 : 0;
           _maybeAutoShowInteraction(state);
           final todos = _latestTodos(state);
@@ -487,14 +496,14 @@ class _ConversationPageState extends State<ConversationPage> {
               Expanded(
                 child: Stack(
                   children: [
-                    rows.isEmpty
+                    renderRows.isEmpty
                         ? const Center(child: Text('等待 agent 开始工作…'))
                         : ListView.builder(
                             controller: _scrollController,
                             reverse: true,
                             padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                             itemCount:
-                                rows.length +
+                                renderRows.length +
                                 extraStatusRow +
                                 (_showOlderHeader ? 1 : 0),
                             itemBuilder: (context, i) {
@@ -504,7 +513,7 @@ class _ConversationPageState extends State<ConversationPage> {
                               // The oldest side (visual top) hosts the
                               // older-rows loading / end-of-history header.
                               if (_showOlderHeader &&
-                                  i == rows.length + extraStatusRow) {
+                                  i == renderRows.length + extraStatusRow) {
                                 return OlderRowsHeader(
                                   key: const ValueKey('older-rows-header'),
                                   loading: _loadingOlder,
@@ -519,12 +528,12 @@ class _ConversationPageState extends State<ConversationPage> {
                                       runningTurn.createdAt,
                                 );
                               }
-                              final j = rows.length - 1 - (i - extraStatusRow);
+                              final j = renderRows.length - 1 - (i - extraStatusRow);
                               return _rowWidget(
                                 context,
-                                rows[j],
-                                nextCreatedAt: j + 1 < rows.length
-                                    ? rows[j + 1].createdAt
+                                renderRows[j],
+                                nextCreatedAt: j + 1 < renderRows.length
+                                    ? renderRows[j + 1].createdAt
                                     : null,
                                 entranceRowId: entranceRowId,
                               );
@@ -1822,17 +1831,27 @@ class OlderRowsHeader extends StatelessWidget {
 ///
 /// Uses a ShaderMask (animated LinearGradient) for the continuous in-glyph
 /// gradient.
-class _TurnStatusLine extends StatefulWidget {
-  final int? startedAt;
-  const _TurnStatusLine({super.key, required this.startedAt});
+// Sweep-label palette (shared by the bottom "工作中" line and sub-agent
+// status): passing light flares the swept glyphs up to pure white while the
+// rest of the label rests in a mid gray — maximum text-vs-light contrast.
+const Color _sweepTextGray = Color(0xFF8B9199);
+const Color _sweepFluorescent = Color(0xFFFFFFFF);
+
+/// Status word lit by a travelling highlight ("工作中", "正在执行") — the
+/// light band sweeps left→right and its reset happens off screen, so the
+/// animation never looks like a jump. ShaderMask compositing is unreliable on
+/// the Android emulator (whole label renders solid grey, no logcat error);
+/// verify on a real device.
+class _SweepingLabel extends StatefulWidget {
+  final String text;
+  const _SweepingLabel({required this.text});
 
   @override
-  State<_TurnStatusLine> createState() => _TurnStatusLineState();
+  State<_SweepingLabel> createState() => _SweepingLabelState();
 }
 
-class _TurnStatusLineState extends State<_TurnStatusLine>
+class _SweepingLabelState extends State<_SweepingLabel>
     with SingleTickerProviderStateMixin {
-  Timer? _ticker;
   late final AnimationController _sweep;
 
   // Light ramp half-width and off-screen margin, both as fractions of the
@@ -1842,17 +1861,9 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
   static const double _bandHalf = 0.15;
   static const double _padFraction = 0.8;
 
-  // Passing light flares the swept character up to pure white, while the rest
-  // of the label rests in a mid gray — maximum text-vs-light contrast.
-  static const Color _textGray = Color(0xFF8B9199);
-  static const Color _fluorescent = Color(0xFFFFFFFF);
-
   @override
   void initState() {
     super.initState();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
     _sweep = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
@@ -1861,22 +1872,21 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
 
   @override
   void dispose() {
-    _ticker?.cancel();
     _sweep.dispose();
     super.dispose();
   }
 
-  /// [text] ("工作中") lit by a continuous gradient light. [sweep]∈[0..1] maps
-  /// the light from off beyond the left edge (band fully outside the glyphs)
-  /// to off beyond the right edge, so the band slides in and rolls out
-  /// naturally and its reset happens off screen. The gray→white→gray ramp
-  /// passes straight through every glyph as it travels.
-  Widget _fluorescentLabel(BuildContext context, String text, double sweep) {
+  /// [text] lit by a continuous gradient light. [sweep]∈[0..1] maps the light
+  /// from off beyond the left edge (band fully outside the glyphs) to off
+  /// beyond the right edge, so the band slides in and rolls out naturally and
+  /// its reset happens off screen. The gray→white→gray ramp passes straight
+  /// through every glyph as it travels.
+  Widget _fluorescentLabel(BuildContext context, double sweep) {
     final base = (Theme.of(context).textTheme.labelMedium ??
             const TextStyle(fontSize: 12))
-        .copyWith(color: _textGray, fontWeight: FontWeight.w800);
+        .copyWith(color: _sweepTextGray, fontWeight: FontWeight.w800);
     final tp = TextPainter(
-      text: TextSpan(text: text, style: base),
+      text: TextSpan(text: widget.text, style: base),
       textDirection: TextDirection.ltr,
     )..layout();
     final pad = _padFraction * tp.width;
@@ -1885,12 +1895,12 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
     return ShaderMask(
       shaderCallback: (bounds) => LinearGradient(
         colors: [
-          _textGray,
-          _textGray,
-          _fluorescent,
-          _fluorescent,
-          _textGray,
-          _textGray,
+          _sweepTextGray,
+          _sweepTextGray,
+          _sweepFluorescent,
+          _sweepFluorescent,
+          _sweepTextGray,
+          _sweepTextGray,
         ],
         stops: [
           0,
@@ -1904,9 +1914,51 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
       blendMode: BlendMode.srcATop,
       child: Padding(
         padding: EdgeInsets.symmetric(horizontal: pad),
-        child: Text(text, style: base),
+        child: Text(widget.text, style: base),
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _sweep,
+      builder: (_, _) {
+        // Sweep 0→1 travels the light from off the left edge to off the
+        // right; the curve eases the slide in/out.
+        final sweep = Curves.easeInOutSine.transform(_sweep.value);
+        return _fluorescentLabel(context, sweep);
+      },
+    );
+  }
+}
+
+/// Pinned bottom status line while a turn is running: the "工作中" sweep on
+/// the left, elapsed time on the right (time is static per build — only the
+/// label sweeps; the 1s timer re-renders the elapsed text).
+class _TurnStatusLine extends StatefulWidget {
+  final int? startedAt;
+  const _TurnStatusLine({super.key, required this.startedAt});
+
+  @override
+  State<_TurnStatusLine> createState() => _TurnStatusLineState();
+}
+
+class _TurnStatusLineState extends State<_TurnStatusLine> {
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1917,21 +1969,13 @@ class _TurnStatusLineState extends State<_TurnStatusLine>
         : DateTime.now().millisecondsSinceEpoch - startedAt;
     final labelStyle = (Theme.of(context).textTheme.labelMedium ??
             const TextStyle(fontSize: 12))
-        .copyWith(color: _textGray, fontWeight: FontWeight.w800);
+        .copyWith(color: _sweepTextGray, fontWeight: FontWeight.w800);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          AnimatedBuilder(
-            animation: _sweep,
-            builder: (_, _) {
-              // Sweep 0→1 travels the light from off the left edge to off the
-              // right; the curve eases the slide in/out.
-              final sweep = Curves.easeInOutSine.transform(_sweep.value);
-              return _fluorescentLabel(context, '工作中', sweep);
-            },
-          ),
+          const _SweepingLabel(text: '工作中'),
           if (elapsed != null && elapsed >= 0)
             Text(_formatDuration(elapsed), style: labelStyle),
         ],
@@ -1993,6 +2037,12 @@ class _ToolCallLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, verb, preview) = _describe(row);
+    // 折叠后一个子代理只留这一行（subagent 摘要行被跳过）：运行中行首用
+    // 「正在执行」扫光（与底部「工作中」同一动画）替代转圈指示，点开仍可
+    // 看输入/输出/错误。
+    final taskRunning =
+        row.toolName == 'Task' &&
+        (row.status == 'running' || row.status == 'pending');
 
     return InkWell(
       onTap: onTap,
@@ -2001,19 +2051,24 @@ class _ToolCallLine extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: [
-            _statusIcon(context, row.status, icon),
+            taskRunning
+                ? const _SweepingLabel(text: '正在执行')
+                : _statusIcon(context, row.status, icon),
             const SizedBox(width: 8),
             Expanded(
               child: Text.rich(
                 TextSpan(
                   children: [
-                    TextSpan(
-                      text: verb,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
+                    // 运行中行首的扫光词已是状态表达，动词（「子代理」）不再
+                    // 重复；非运行中保持「子代理 · 描述」。
+                    if (!taskRunning)
+                      TextSpan(
+                        text: verb,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
                     if (preview.isNotEmpty)
                       TextSpan(
-                        text: ' $preview',
+                        text: taskRunning ? preview : ' $preview',
                         style: TextStyle(color: scheme.onSurface),
                       ),
                   ],
@@ -2199,11 +2254,16 @@ class _SubagentLine extends StatelessWidget {
     final summary = row.summaryText.isEmpty
         ? '子代理'
         : _firstLine(row.summaryText);
+    // 未与 Task 工具行配对折叠的独立子代理行：运行中同样以「正在执行」
+    // 扫光替代转圈指示（与主行的折叠态一致）。
+    final running = row.status == 'running' || row.status == 'pending';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
-          _statusIcon(context, row.status, Icons.smart_toy_outlined),
+          running
+              ? const _SweepingLabel(text: '正在执行')
+              : _statusIcon(context, row.status, Icons.smart_toy_outlined),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -2527,7 +2587,13 @@ class _SubagentDetailSheetState extends State<_SubagentDetailSheet> {
   Widget _body(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (_loading) return const Center(child: CircularProgressIndicator());
-    final rows = _rows.values.toList();
+    final allRows = _rows.values.toList();
+    // 与主页面同一折叠：子代理的 Task 工具行保留、摘要行跳过。
+    final foldedSubagent = foldedSubagentRowIds(allRows);
+    final rows = [
+      for (final r in allRows)
+        if (!foldedSubagent.contains(r.rowId)) r,
+    ];
     if (rows.isEmpty) {
       // Show the fetch error only when there is nothing to display; transient
       // poll failures while rows exist keep the log visible (the next tick

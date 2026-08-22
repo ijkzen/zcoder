@@ -42,6 +42,19 @@ void main() {
     expect(sub.textForCache, 'Standards 轴代码审查');
   });
 
+  test('SubagentRow parses parentToolCallId (fold pairing key)', () {
+    final row = SubagentRow.fromJson({
+      'rowId': 462,
+      'kind': 'subagent',
+      'subagentType': 'Explore',
+      'status': 'running',
+      'summaryText': '探索',
+      'parentToolCallId': 'tool_call_99',
+    }, 462, null, null, null);
+    expect(row.parentToolCallId, 'tool_call_99');
+    expect(row.subagentType, 'Explore');
+  });
+
   test('TurnHeaderRow parses state/startedAt/origin', () {
     final row = ConversationRow.fromJson({
       'rowId': 384,

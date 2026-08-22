@@ -345,4 +345,49 @@ void main() {
       expect(s.runningSubagents.first['childSessionId'], 'c');
     });
   });
+
+  group('foldedSubagentRowIds (one sub-agent = one rendered row)', () {
+    ToolCallRow task(int rowId, String toolCallId, {String toolName = 'Task'}) =>
+        ToolCallRow.fromJson({
+          'rowId': rowId,
+          'kind': 'toolCall',
+          'toolName': toolName,
+          'toolCallId': toolCallId,
+          'status': 'running',
+          'input': {'description': '探索代码库结构'},
+        }, rowId, null, null, null);
+
+    SubagentRow sub(int rowId, String parentToolCallId) => SubagentRow.fromJson({
+      'rowId': rowId,
+      'kind': 'subagent',
+      'subagentType': 'Explore',
+      'status': 'running',
+      'summaryText': '探索代码库结构',
+      'parentToolCallId': parentToolCallId,
+    }, rowId, null, null, null);
+
+    test('Task 行 + parentToolCallId 指向它的 subagent 行 → 摘要行折叠', () {
+      expect(foldedSubagentRowIds([task(10, 't1'), sub(11, 't1')]), {11});
+    });
+
+    test('parentToolCallId 为空或指向不存在的 Task 行 → 不折叠', () {
+      expect(foldedSubagentRowIds([task(10, 't1'), sub(11, '')]), isEmpty);
+      expect(foldedSubagentRowIds([sub(11, 'missing')]), isEmpty);
+    });
+
+    test('多个子代理各自折叠，互不影响', () {
+      final rows = [
+        task(10, 't1'),
+        sub(11, 't1'),
+        task(20, 't2'),
+        sub(21, 't2'),
+      ];
+      expect(foldedSubagentRowIds(rows), {11, 21});
+    });
+
+    test('非 Task 工具行的 toolCallId 不参与配对', () {
+      final rows = [task(10, 't1', toolName: 'Bash'), sub(11, 't1')];
+      expect(foldedSubagentRowIds(rows), isEmpty);
+    });
+  });
 }
