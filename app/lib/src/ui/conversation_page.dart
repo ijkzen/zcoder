@@ -612,7 +612,7 @@ class _ConversationPageState extends State<ConversationPage> {
     }
     for (final row in state.orderedRows.reversed) {
       if (row is ToolCallRow && row.toolName == 'TodoWrite') {
-        final input = row.input ?? _ToolCallLine._tryDecode(row.inputText);
+        final input = row.input ?? ToolCallLine._tryDecode(row.inputText);
         final todos = input?['todos'];
         if (todos is List) {
           final items = <TodoItem>[];
@@ -1209,7 +1209,7 @@ class _ConversationPageState extends State<ConversationPage> {
               : () => _showReasoningDetail(row, durationMs),
         );
       case ToolCallRow():
-        child = _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
+        child = ToolCallLine(row: row, onTap: () => _showToolDetail(row));
       case SubagentRow():
         child = _SubagentLine(row: row);
       case TimelineMarkerRow():
@@ -1351,8 +1351,8 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   void _showToolDetail(ToolCallRow row) {
-    final (_, verb, _) = _ToolCallLine._describe(row);
-    final input = _ToolCallLine._prettyInput(row);
+    final (_, verb, _) = ToolCallLine._describe(row);
+    final input = ToolCallLine._prettyInput(row);
     final output = row.output;
     // For tools without a status verb mapping, _describe falls back to the
     // tool name itself; printing both would read "AskUserQuestion AskUserQuestion".
@@ -1366,11 +1366,11 @@ class _ConversationPageState extends State<ConversationPage> {
           children: [
             if (input.isNotEmpty) ...[
               const DetailLabel('输入'),
-              MonoText(text: _ToolCallLine._trim(input)),
+              MonoText(text: ToolCallLine._trim(input)),
             ],
             if (output != null && output.isNotEmpty) ...[
               const DetailLabel('输出'),
-              MonoText(text: _ToolCallLine._trim(output)),
+              MonoText(text: ToolCallLine._trim(output)),
             ],
             if (row.error != null && row.error!.isNotEmpty) ...[
               const DetailLabel('错误'),
@@ -1412,16 +1412,11 @@ String _firstLine(String s, [int max = 90]) {
 String _entryStatus(Map<String, Object?> entry) =>
     entry['status']?.toString() ?? '';
 
-/// Small leading icon for a one-line row, colored by status.
+/// Small leading icon for a one-line row, colored by status. Running rows no
+/// longer reach this — they lead with the [SweepingLabel] instead; only
+/// completed/failed rows get an icon.
 Widget _statusIcon(BuildContext context, String status, IconData icon) {
   final scheme = Theme.of(context).colorScheme;
-  if (status == 'running' || status == 'pending') {
-    return SizedBox(
-      width: 14,
-      height: 14,
-      child: CircularProgressIndicator(strokeWidth: 2, color: scheme.primary),
-    );
-  }
   final failed = status == 'error' || status == 'failed';
   return Icon(
     failed ? Icons.error_outline : icon,
@@ -1839,25 +1834,29 @@ const Color _sweepFluorescent = Color(0xFFFFFFFF);
 
 /// Status word lit by a travelling highlight ("工作中", "正在执行") — the
 /// light band sweeps left→right and its reset happens off screen, so the
-/// animation never looks like a jump. ShaderMask compositing is unreliable on
-/// the Android emulator (whole label renders solid grey, no logcat error);
-/// verify on a real device.
-class _SweepingLabel extends StatefulWidget {
+/// animation never looks like a jump. Public so it can be widget-tested
+/// independently of the full conversation page. ShaderMask compositing is
+/// unreliable on the Android emulator (whole label renders solid grey, no
+/// logcat error); verify on a real device.
+class SweepingLabel extends StatefulWidget {
   final String text;
-  const _SweepingLabel({required this.text});
+  const SweepingLabel({super.key, required this.text});
 
   @override
-  State<_SweepingLabel> createState() => _SweepingLabelState();
+  State<SweepingLabel> createState() => _SweepingLabelState();
 }
 
-class _SweepingLabelState extends State<_SweepingLabel>
+class _SweepingLabelState extends State<SweepingLabel>
     with SingleTickerProviderStateMixin {
   late final AnimationController _sweep;
 
   // Light ramp half-width and off-screen margin, both as fractions of the
   // total masked width. The margin lets the band slide in from beyond the left
   // edge and roll out past the right edge, so the sweep's reset happens off
-  // screen and never looks like a jump.
+  // screen and never looks like a jump. Only the right margin occupies layout
+  // width — the left margin is virtual (shader space only), so the first
+  // glyph's left edge sits exactly at the widget's left edge and the label
+  // left-aligns with row icons and other sweep labels.
   static const double _bandHalf = 0.15;
   static const double _padFraction = 0.8;
 
@@ -1893,6 +1892,9 @@ class _SweepingLabelState extends State<_SweepingLabel>
     // Map the sweep so the band ends up outside the masked area at both ends.
     final c = _bandHalf + sweep * (1 - 2 * _bandHalf);
     return ShaderMask(
+      // The layout holds only the right margin; the gradient rect is extended
+      // `pad` beyond the left edge, so the slide-in still happens off-glyph
+      // and the sweep math is unchanged from the symmetric-margin version.
       shaderCallback: (bounds) => LinearGradient(
         colors: [
           _sweepTextGray,
@@ -1910,10 +1912,15 @@ class _SweepingLabelState extends State<_SweepingLabel>
           c + _bandHalf,
           1,
         ],
-      ).createShader(bounds),
+      ).createShader(Rect.fromLTWH(
+        bounds.left - pad,
+        bounds.top,
+        bounds.width + pad,
+        bounds.height,
+      )),
       blendMode: BlendMode.srcATop,
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: pad),
+        padding: EdgeInsets.only(right: pad),
         child: Text(widget.text, style: base),
       ),
     );
@@ -1975,7 +1982,7 @@ class _TurnStatusLineState extends State<_TurnStatusLine> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const _SweepingLabel(text: '工作中'),
+          const SweepingLabel(text: '工作中'),
           if (elapsed != null && elapsed >= 0)
             Text(_formatDuration(elapsed), style: labelStyle),
         ],
@@ -2027,22 +2034,26 @@ class _ReasoningLine extends StatelessWidget {
 /// Compact one-line tool call, matching the desktop: an icon, a status verb
 /// and a preview ("已执行 grep -ao …", "MCP Kimi Cu · Get App State"). Tapping
 /// opens input/output in a dialog (inline expansion made the list jump).
-class _ToolCallLine extends StatelessWidget {
+/// Public so it can be widget-tested independently of the full conversation
+/// page.
+class ToolCallLine extends StatelessWidget {
   final ToolCallRow row;
   final VoidCallback onTap;
 
-  const _ToolCallLine({required this.row, required this.onTap});
+  const ToolCallLine({super.key, required this.row, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final (icon, verb, preview) = _describe(row);
-    // 折叠后一个子代理只留这一行（subagent 摘要行被跳过）：运行中行首用
-    // 「正在执行」扫光（与底部「工作中」同一动画）替代转圈指示，点开仍可
-    // 看输入/输出/错误。
-    final taskRunning =
-        row.toolName == 'Task' &&
-        (row.status == 'running' || row.status == 'pending');
+    // 运行中行首一律用「正在执行」扫光（与底部「工作中」同一动画，左缘对齐），
+    // 不再转圈；点开仍可看输入/输出/错误。
+    final running = row.status == 'running' || row.status == 'pending';
+    // 扫光词已是状态表达：Task 的「子代理」与 Bash/未知工具的状态动词
+    // （「正在执行」「正在运行」）不再重复；工具名动词（读取/编辑/MCP xx 等）
+    // 保留，运行中也能看出是什么工具在执行。
+    final verbShown = !running ||
+        (row.toolName != 'Task' && verb != '正在执行' && verb != '正在运行');
 
     return InkWell(
       onTap: onTap,
@@ -2051,24 +2062,22 @@ class _ToolCallLine extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: [
-            taskRunning
-                ? const _SweepingLabel(text: '正在执行')
+            running
+                ? const SweepingLabel(text: '正在执行')
                 : _statusIcon(context, row.status, icon),
             const SizedBox(width: 8),
             Expanded(
               child: Text.rich(
                 TextSpan(
                   children: [
-                    // 运行中行首的扫光词已是状态表达，动词（「子代理」）不再
-                    // 重复；非运行中保持「子代理 · 描述」。
-                    if (!taskRunning)
+                    if (verbShown)
                       TextSpan(
                         text: verb,
                         style: TextStyle(color: scheme.onSurfaceVariant),
                       ),
                     if (preview.isNotEmpty)
                       TextSpan(
-                        text: taskRunning ? preview : ' $preview',
+                        text: verbShown ? ' $preview' : preview,
                         style: TextStyle(color: scheme.onSurface),
                       ),
                   ],
@@ -2262,7 +2271,7 @@ class _SubagentLine extends StatelessWidget {
       child: Row(
         children: [
           running
-              ? const _SweepingLabel(text: '正在执行')
+              ? const SweepingLabel(text: '正在执行')
               : _statusIcon(context, row.status, Icons.smart_toy_outlined),
           const SizedBox(width: 8),
           Expanded(
@@ -2360,16 +2369,18 @@ class _SubagentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final title = entry['title']?.toString() ?? '';
     final type = entry['subagentType']?.toString() ?? '';
     final summary = entry['summary']?.toString() ?? '';
     return ListTile(
       dense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-      leading: _statusIcon(
-        context,
-        _entryStatus(entry),
+      // 弹层语义本身即「运行中」：leading 用固定图标，不转圈也不扫光。
+      leading: Icon(
         Icons.smart_toy_outlined,
+        size: 15,
+        color: scheme.onSurfaceVariant,
       ),
       title: Text(
         title.isEmpty ? '未命名子代理' : title,
@@ -2511,8 +2522,8 @@ class _SubagentDetailSheetState extends State<_SubagentDetailSheet> {
 
   /// Tool input/output detail dialog (same shape as the main page).
   void _showToolDetail(ToolCallRow row) {
-    final (_, verb, _) = _ToolCallLine._describe(row);
-    final input = _ToolCallLine._prettyInput(row);
+    final (_, verb, _) = ToolCallLine._describe(row);
+    final input = ToolCallLine._prettyInput(row);
     final output = row.output;
     final title = verb == row.toolName ? row.toolName : '$verb ${row.toolName}';
     showDialog<void>(
@@ -2524,11 +2535,11 @@ class _SubagentDetailSheetState extends State<_SubagentDetailSheet> {
           children: [
             if (input.isNotEmpty) ...[
               const DetailLabel('输入'),
-              MonoText(text: _ToolCallLine._trim(input)),
+              MonoText(text: ToolCallLine._trim(input)),
             ],
             if (output != null && output.isNotEmpty) ...[
               const DetailLabel('输出'),
-              MonoText(text: _ToolCallLine._trim(output)),
+              MonoText(text: ToolCallLine._trim(output)),
             ],
           ],
         ),
@@ -2574,7 +2585,7 @@ class _SubagentDetailSheetState extends State<_SubagentDetailSheet> {
               : () => _showReasoningDetail(row, durationMs),
         );
       case ToolCallRow():
-        return _ToolCallLine(row: row, onTap: () => _showToolDetail(row));
+        return ToolCallLine(row: row, onTap: () => _showToolDetail(row));
       case SubagentRow():
         return _SubagentLine(row: row);
       case TimelineMarkerRow():
