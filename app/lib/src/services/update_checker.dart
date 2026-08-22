@@ -6,6 +6,7 @@
 /// accelerators below only proxy github.com file downloads, not the API.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -40,9 +41,10 @@ enum UpdateMirror {
   /// Direct download from github.com.
   official('official', '官方直连', null),
 
-  /// Try every [accelerators] member in order, then fall back to the
-  /// official direct download when all of them fail. Recommended default.
-  auto('auto', '自动切换（推荐）', null),
+  /// Races every [accelerators] member plus the official direct download
+  /// concurrently, keeps the fastest connection, and re-races the survivors
+  /// if the winner fails mid-download. Recommended default.
+  auto('auto', '自动测速（推荐）', null),
 
   /// gh-proxy.com — Cloudflare Worker, multiple edge nodes.
   ghProxyCom('ghProxyCom', 'gh-proxy.com', 'https://gh-proxy.com/'),
@@ -74,7 +76,9 @@ enum UpdateMirror {
 
   const UpdateMirror(this.label, this.displayName, this.prefix);
 
-  /// The accelerators tried by [UpdateMirror.auto], in order.
+  /// The accelerators raced by [UpdateMirror.auto]. Order is only a
+  /// tie-breaker — all of them start downloading concurrently and the
+  /// fastest connection wins.
   static const List<UpdateMirror> accelerators = [
     UpdateMirror.ghProxyCom,
     UpdateMirror.ghFast,
@@ -380,15 +384,25 @@ class UpdateChecker {
   /// caller can switch to the next candidate (a slow-but-alive mirror).
   static const _progressTimeout = Duration(seconds: 15);
 
+  /// How much real file data a race contestant must stream to win the probe
+  /// phase outright: the first candidate to deliver this many bytes is the
+  /// fastest in practice and keeps its connection — the probe bytes are the
+  /// start of the actual file, so nothing is downloaded twice.
+  static const _probeBytes = 512 * 1024;
+
+  /// When nobody reaches [_probeBytes] within this window, the contestant
+  /// with the most bytes so far wins — covers the "everyone alive but slow"
+  /// case.
+  static const _probeDeadline = Duration(seconds: 20);
+
   /// Downloads the APK to a temporary file, reporting progress via [onProgress]
   /// (0.0–1.0) and the source actually being used via [onSource].
   ///
   /// [mirror] controls the download source: [UpdateMirror.official] downloads
-  /// directly; [UpdateMirror.auto] tries every accelerator in order then falls
-  /// back to the official URL; a specific accelerator tries that mirror then
-  /// the official URL. A stalled candidate (no first byte, or no progress for
-  /// a while) is abandoned in favor of the next one. Defaults to
-  /// [UpdateMirror.auto] — the recommended multi-mirror chain.
+  /// directly; [UpdateMirror.auto] races every accelerator plus the official
+  /// URL concurrently and keeps the fastest connection (see [downloadRacing]);
+  /// a specific accelerator tries that mirror then falls back to the official
+  /// URL. Defaults to [UpdateMirror.auto] — the recommended multi-mirror mode.
   ///
   /// Returns the path to the downloaded file.
   Future<String> downloadApk(
@@ -399,6 +413,15 @@ class UpdateChecker {
   }) async {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/${asset.name}');
+    if (mirror == UpdateMirror.auto) {
+      return downloadRacing(
+        candidateUrls(asset.downloadUrl, mirror),
+        asset,
+        file,
+        onProgress: onProgress,
+        onSource: onSource,
+      );
+    }
     Object? lastError;
     for (final (:url, :name) in candidateUrls(asset.downloadUrl, mirror)) {
       try {
@@ -416,9 +439,54 @@ class UpdateChecker {
     throw UpdateCheckException('下载失败: $lastError');
   }
 
-  /// The download URLs to try for [mirror], in order, paired with the source
-  /// name to show (null name = official direct download). Public so the UI
-  /// can preview what will be tried.
+  /// The concurrent download race behind [UpdateMirror.auto]: every candidate
+  /// starts streaming the file at once, the first to deliver [probeBytes]
+  /// real bytes wins and keeps its connection (probe bytes are the head of
+  /// the actual file), the losers are cancelled. If nobody reaches the
+  /// threshold within [probeDeadline] the current byte-count leader wins; if
+  /// the winner then fails mid-download, the surviving candidates race again
+  /// from scratch. Throws [UpdateCheckException] when every candidate dies.
+  Future<String> downloadRacing(
+    List<({String url, String? name})> candidates,
+    AssetInfo asset,
+    File file, {
+    void Function(double progress)? onProgress,
+    void Function(String source)? onSource,
+    Duration probeDeadline = _probeDeadline,
+    int probeBytes = _probeBytes,
+    Duration progressTimeout = _progressTimeout,
+  }) async {
+    var remaining = candidates;
+    Object? lastError;
+    while (remaining.isNotEmpty) {
+      try {
+        return await _raceOnce(
+          remaining,
+          asset,
+          file,
+          onProgress: onProgress,
+          onSource: onSource,
+          probeDeadline: probeDeadline,
+          probeBytes: probeBytes,
+          progressTimeout: progressTimeout,
+        );
+      } on _RaceRoundException catch (e) {
+        zlog('[UpdateChecker] 本轮竞速失败，${e.failed.length} 个源出局: ${e.cause}');
+        lastError = e.cause;
+        remaining = [
+          for (var i = 0; i < remaining.length; i++)
+            if (!e.failed.contains(i)) remaining[i],
+        ];
+      }
+    }
+    throw UpdateCheckException('下载失败: $lastError');
+  }
+
+  /// The download URLs for [mirror], paired with the source name to show
+  /// (null name = official direct download). For [UpdateMirror.auto] this is
+  /// the full race field — every accelerator plus the official URL; for a
+  /// specific mirror it is that mirror followed by the official fallback.
+  /// Public so the UI can preview the sources.
   List<({String url, String? name})> candidateUrls(
     String downloadUrl,
     UpdateMirror mirror,
@@ -477,12 +545,260 @@ class UpdateChecker {
     }
   }
 
+  /// One round of the race: every candidate in [candidates] streams into its
+  /// own probe file until a winner emerges. On success the winner's probe
+  /// file is renamed to [file] and its path returned. On failure a
+  /// [_RaceRoundException] carries the indices of the dead candidates so the
+  /// caller can re-race the survivors.
+  Future<String> _raceOnce(
+    List<({String url, String? name})> candidates,
+    AssetInfo asset,
+    File file, {
+    void Function(double progress)? onProgress,
+    void Function(String source)? onSource,
+    required Duration probeDeadline,
+    required int probeBytes,
+    required Duration progressTimeout,
+  }) async {
+    final contestants = <_RaceContestant>[
+      for (var i = 0; i < candidates.length; i++)
+        _RaceContestant(
+          url: candidates[i].url,
+          name: candidates[i].name,
+          file: File('${file.path}.race$i'),
+        ),
+    ];
+
+    final winnerFound = Completer<_RaceContestant?>();
+    Timer? deadlineTimer;
+    _RaceContestant? winner;
+
+    void reportProgress() {
+      if (onProgress == null) return;
+      final w = winner;
+      if (w != null) {
+        // After the probe phase only the winner's bytes count.
+        if (w.total > 0) {
+          final v = w.received / w.total;
+          onProgress(v > 1.0 ? 1.0 : v);
+        }
+      } else {
+        // During the probe phase show the leading edge across all candidates.
+        var maxReceived = 0;
+        for (final c in contestants) {
+          if (c.received > maxReceived) maxReceived = c.received;
+        }
+        final total = asset.size > 0 ? asset.size : 1;
+        final v = maxReceived / total;
+        onProgress(v > 1.0 ? 1.0 : v);
+      }
+    }
+
+    _RaceContestant? leader() {
+      _RaceContestant? best;
+      for (final c in contestants) {
+        if (c.failed || c.aborted) continue;
+        if (best == null || c.received > best.received) best = c;
+      }
+      return best;
+    }
+
+    void checkState() {
+      if (winnerFound.isCompleted) return;
+      if (contestants.every((c) => c.failed || c.aborted)) {
+        winnerFound.complete(null);
+        return;
+      }
+      final best = leader();
+      if (best != null &&
+          best.received > 0 &&
+          (best.received >= probeBytes ||
+              (best.total > 0 && best.received >= best.total))) {
+        winnerFound.complete(best);
+      }
+    }
+
+    try {
+      onSource?.call('多源测速中（${contestants.length} 个源）…');
+      zlog('[UpdateChecker] 开始 ${contestants.length} 路并发测速下载');
+      for (final c in contestants) {
+        c.start(
+          asset,
+          progressTimeout: progressTimeout,
+          onBytes: () {
+            reportProgress();
+            checkState();
+          },
+          onSettled: () {
+            if (c.failed) zlog('[UpdateChecker] ${c.label} 出局: ${c.error}');
+            checkState();
+          },
+        );
+      }
+      deadlineTimer = Timer(probeDeadline, () {
+        if (winnerFound.isCompleted) return;
+        // Everyone alive but too slow for the threshold — commit to the
+        // current leader. A zero-byte leader is still connecting; its own
+        // first-byte timeout ends the round if it never delivers.
+        final best = leader();
+        if (best != null) winnerFound.complete(best);
+      });
+
+      winner = await winnerFound.future;
+      final w = winner;
+      if (w == null) {
+        throw _RaceRoundException(
+          failed: {for (var i = 0; i < contestants.length; i++) i},
+          cause: contestants
+                  .firstWhere((c) => c.error != null)
+                  .error ??
+              '所有下载源均不可用',
+        );
+      }
+      final winnerIndex = contestants.indexOf(w);
+
+      onSource?.call(w.label);
+      zlog('[UpdateChecker] 测速胜出: ${w.label} (已接收 ${w.received} 字节)');
+
+      // Cancel the losers immediately so the winner gets the full bandwidth;
+      // the winner keeps streaming into its probe file.
+      for (final c in contestants) {
+        if (!identical(c, w)) unawaited(c.abort());
+      }
+
+      await w.done;
+      if (w.error != null) {
+        throw _RaceRoundException(
+          failed: {
+            winnerIndex,
+            for (var i = 0; i < contestants.length; i++)
+              if (contestants[i].failed) i,
+          },
+          cause: w.error!,
+        );
+      }
+
+      await w.file.rename(file.path);
+      zlog('[UpdateChecker] 通过 ${w.label} 下载完成 (${w.received} bytes)');
+      return file.path;
+    } finally {
+      deadlineTimer?.cancel();
+      await Future.wait([
+        for (final c in contestants)
+          if (!identical(c, winner)) c.abort(),
+      ]);
+      // A failed winner's partial probe file must not linger either.
+      if (winner != null && winner.error != null) await winner.abort();
+    }
+  }
+
   DateTime _parseDate(dynamic release) {
     final raw = release['published_at'] as String? ??
         release['created_at'] as String? ??
         '';
     return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
+}
+
+/// One contestant in a download race round: streams the file into its own
+/// probe file until it wins (file kept and renamed by the caller) or loses
+/// (connection cancelled, probe file deleted via [abort]).
+class _RaceContestant {
+  _RaceContestant({required this.url, required this.name, required this.file});
+
+  final String url;
+
+  /// Accelerator display name; null = official direct download.
+  final String? name;
+
+  final File file;
+
+  final http.Client _client = http.Client();
+  final Completer<void> _done = Completer<void>();
+  StreamSubscription<List<int>>? _sub;
+  IOSink? _sink;
+  void Function()? _onSettled;
+
+  int received = 0;
+  int total = 0;
+  Object? error;
+  bool aborted = false;
+
+  String get label => name ?? '官方直连';
+  bool get failed => error != null;
+
+  /// Completes when the download ends, successfully or not — inspect [error].
+  Future<void> get done => _done.future;
+
+  void start(
+    AssetInfo asset, {
+    required void Function() onBytes,
+    required void Function() onSettled,
+    Duration progressTimeout = UpdateChecker._progressTimeout,
+  }) {
+    _onSettled = onSettled;
+    () async {
+      try {
+        final response = await _client
+            .send(http.Request('GET', Uri.parse(url)))
+            .timeout(UpdateChecker._firstByteTimeout);
+        if (response.statusCode != 200) {
+          throw UpdateCheckException('$label下载失败: HTTP ${response.statusCode}');
+        }
+        total = response.contentLength ?? asset.size;
+        _sink = file.openWrite();
+        _sub = response.stream.timeout(progressTimeout).listen(
+          (chunk) {
+            final sink = _sink;
+            if (sink == null) return;
+            sink.add(chunk);
+            received += chunk.length;
+            onBytes();
+          },
+          cancelOnError: true,
+          onError: (Object e) => _finish(error: e),
+          onDone: () => _finish(),
+        );
+      } catch (e) {
+        _finish(error: e);
+      }
+    }();
+  }
+
+  Future<void> _finish({Object? error}) async {
+    if (_done.isCompleted) return;
+    if (!aborted && error != null) this.error = error;
+    await _sub?.cancel();
+    _client.close();
+    final sink = _sink;
+    _sink = null;
+    if (sink != null) {
+      try {
+        await sink.flush();
+        await sink.close();
+      } catch (_) {}
+    }
+    _done.complete();
+    _onSettled?.call();
+  }
+
+  /// Cancels the download and deletes the probe file.
+  Future<void> abort() async {
+    aborted = true;
+    await _finish();
+    try {
+      await file.delete();
+    } catch (_) {}
+  }
+}
+
+/// One race round failed; [failed] holds the indices (into the round's
+/// candidate list) of the contestants that died and must not be retried.
+class _RaceRoundException implements Exception {
+  _RaceRoundException({required this.failed, required this.cause});
+
+  final Set<int> failed;
+  final Object cause;
 }
 
 /// Thrown when the update check or download fails.
