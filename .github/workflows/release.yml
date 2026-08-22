@@ -49,6 +49,58 @@ jobs:
           echo "date=$(date -u '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
           echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
+      - name: Compose release notes
+        id: notes
+        env:
+          TAG: ${{ steps.versions.outputs.tag }}
+        run: |
+          git fetch --tags --force origin
+          NOTES_FILE="$RUNNER_TEMP/release_notes.md"
+          BODY_FILE="$RUNNER_TEMP/release_body.md"
+
+          # The annotated tag message body is the user-facing changelog.
+          # Empty body → fall back to GitHub's auto-generated notes.
+          # (git always appends a trailing newline, so test for
+          # non-whitespace content rather than non-zero file size.)
+          git tag -l --format='%(contents:body)' "$TAG" > "$NOTES_FILE"
+          if grep -q '[^[:space:]]' "$NOTES_FILE"; then
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag $TAG has no message body; falling back to auto-generated release notes"
+          fi
+
+          {
+            if grep -q '[^[:space:]]' "$NOTES_FILE"; then
+              cat "$NOTES_FILE"
+              printf '\n---\n\n'
+            fi
+            cat <<'EOF'
+          <!-- build-info -->
+
+          ### 构建信息
+
+          | 字段 | 值 |
+          |---|---|
+          | 日期 | ${{ steps.versions.outputs.date }} |
+          | Commit | [`${{ steps.versions.outputs.commit }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+          | Flutter | ${{ steps.versions.outputs.flutter }} |
+
+          ### APK 变体说明
+
+          | 文件 | 架构 | 推荐场景 |
+          |------|------|----------|
+          | `zcode_remote-arm64-v8a-*.apk` | arm64 | **推荐** - 覆盖绝大多数现代 Android 设备（Android 5.0+） |
+          | `zcode_remote-armv7-*.apk` | armv7 | 兼容老旧 32 位设备 |
+          | `zcode_remote-universal-*.apk` | 通用 | 包含所有架构，体积最大，适用于不确定设备架构时 |
+
+          > 可在应用内「设置 → 检查更新」直接下载安装，也可手动下载 APK 安装。
+          > 已启用 R8 代码压缩和资源缩减。
+          EOF
+          } > "$BODY_FILE"
+
+          echo "body_file=$BODY_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Build release APKs (arm64, armv7, universal)
         working-directory: app
         run: |
@@ -76,27 +128,9 @@ jobs:
           tag_name: ${{ steps.versions.outputs.tag }}
           name: ${{ steps.versions.outputs.tag }}
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.notes.outputs.fallback }}
+          body_path: ${{ steps.notes.outputs.body_file }}
           files: |
             app/build/app/outputs/flutter-apk/zcode_remote-arm64-v8a-${{ steps.versions.outputs.tag }}.apk
             app/build/app/outputs/flutter-apk/zcode_remote-armv7-${{ steps.versions.outputs.tag }}.apk
             app/build/app/outputs/flutter-apk/zcode_remote-universal-${{ steps.versions.outputs.tag }}.apk
-          body: |
-            ## ${{ steps.versions.outputs.tag }}
-
-            | 字段 | 值 |
-            |---|---|
-            | 日期 | ${{ steps.versions.outputs.date }} |
-            | Commit | [`${{ steps.versions.outputs.commit }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
-            | Flutter | ${{ steps.versions.outputs.flutter }} |
-
-            ### APK 变体说明
-
-            | 文件 | 架构 | 推荐场景 |
-            |------|------|----------|
-            | `zcode_remote-arm64-v8a-*.apk` | arm64 | **推荐** - 覆盖绝大多数现代 Android 设备（Android 5.0+） |
-            | `zcode_remote-armv7-*.apk` | armv7 | 兼容老旧 32 位设备 |
-            | `zcode_remote-universal-*.apk` | 通用 | 包含所有架构，体积最大，适用于不确定设备架构时 |
-
-            > 可在应用内「设置 → 检查更新」直接下载安装，也可手动下载 APK 安装。
-            > 已启用 R8 代码压缩和资源缩减。

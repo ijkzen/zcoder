@@ -140,6 +140,29 @@ class UpdateInfo {
   }
 }
 
+/// Marker written by release.yml between the user-facing changelog (the
+/// annotated tag message) and the build metadata / APK variant tables.
+/// The update dialog only shows the part before it.
+const kReleaseNotesBuildInfoMarker = '<!-- build-info -->';
+
+/// Trims a GitHub release body at the build-info marker so the update
+/// dialog shows only the changelog. Bodies without the marker (older
+/// releases) are returned unchanged; if trimming would leave nothing
+/// (releases that fell back to GitHub's auto-generated notes, which are
+/// appended after the marker), the full body is returned.
+String? trimReleaseNotes(String? body) {
+  if (body == null) return null;
+  final marker = body.indexOf(kReleaseNotesBuildInfoMarker);
+  if (marker < 0) return body;
+  var notes = body.substring(0, marker).trim();
+  // release.yml separates the changelog from the build info with an `---`
+  // rule; don't leave it dangling at the bottom of the dialog.
+  notes = notes
+      .replaceFirst(RegExp(r'\n{0,2}(?:---|\*\*\*|___)$'), '')
+      .trim();
+  return notes.isEmpty ? body : notes;
+}
+
 /// Parsed semantic version (major, minor, patch).
 class SemVer implements Comparable<SemVer> {
   final int major;
@@ -272,7 +295,7 @@ class UpdateChecker {
             return UpdateInfo(
               tagName: tagName,
               releaseName: release['name'] as String? ?? tagName,
-              releaseNotes: release['body'] as String?,
+              releaseNotes: trimReleaseNotes(release['body'] as String?),
               publishedAt: _parseDate(release),
               asset: asset,
               isPrerelease: isPrerelease,
@@ -292,7 +315,7 @@ class UpdateChecker {
           return UpdateInfo(
             tagName: tagName,
             releaseName: release['name'] as String? ?? tagName,
-            releaseNotes: release['body'] as String?,
+            releaseNotes: trimReleaseNotes(release['body'] as String?),
             publishedAt: _parseDate(release),
             asset: asset,
             isPrerelease: true,

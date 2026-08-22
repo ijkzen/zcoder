@@ -59,6 +59,27 @@ void main() {
     });
   });
 
+  group('trimReleaseNotes', () {
+    test('returns null and marker-less bodies unchanged', () {
+      expect(trimReleaseNotes(null), isNull);
+      expect(trimReleaseNotes('Bug fixes and improvements'),
+          'Bug fixes and improvements');
+    });
+
+    test('keeps only the changelog before the build-info marker', () {
+      const body =
+          '- 新增 A\n- 修复 B\n\n---\n\n$kReleaseNotesBuildInfoMarker\n\n'
+          '### 构建信息\n\n| 字段 | 值 |\n|---|---|';
+      expect(trimReleaseNotes(body), '- 新增 A\n- 修复 B');
+    });
+
+    test('falls back to the full body when the changelog part is empty', () {
+      const body =
+          '$kReleaseNotesBuildInfoMarker\n\n### 构建信息\n\n## What\'s Changed\n* x';
+      expect(trimReleaseNotes(body), body);
+    });
+  });
+
   group('UpdateChecker.candidateUrls', () {
     final url =
         'https://github.com/ijkzen/zcoder/releases/download/v1.0.0/a.apk';
