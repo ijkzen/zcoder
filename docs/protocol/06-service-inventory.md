@@ -115,5 +115,8 @@ runtime:{contextUsage}, projection:{pendingPermissions}, messages?}`),
 `closeSession`, `closeDeferredDraftSession`, `upsertModelProvider`,
 `removeModelProvider`, `updateProviderRegistry`, `resolveRuntimeModelForV4`,
 `setWorkspaceDefaultModel` / `…ThoughtLevel` / `…Mode`, `setModel`
-(`{sessionId, model:"provider/model", thoughtLevel?}`),
+(`{sessionId, model:{providerId, modelId}, thoughtLevel?}` — the host
+resolves `model` against its provider registry as-is and never parses a
+`"provider/model"` string on this channel, and it ignores `thoughtLevel`;
+apply a thought level via `setThoughtLevel` after a successful `setModel`),
 `setThoughtLevel`, `setMode`, `respondProviderRuntimeHeaders`.

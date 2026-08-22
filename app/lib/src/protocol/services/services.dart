@@ -106,7 +106,9 @@ class ZcodeSessionService extends WorkspaceService {
 
   /// Switches the session's model (and optionally thought level) directly on
   /// the runtime — no baseRevision needed, unlike the switchModelConfig
-  /// conversation command.
+  /// conversation command. `model` must travel as a `{providerId, modelId}`
+  /// ref object: the host resolves it against its provider registry as-is
+  /// and never parses a "provider/model" string on this channel.
   Future<Map<String, Object?>> setModel(
     String sessionId, {
     required String provider,
@@ -114,7 +116,7 @@ class ZcodeSessionService extends WorkspaceService {
     String? thoughtLevel,
   }) => _call('setModel', {
     'sessionId': sessionId,
-    'model': '$provider/$model',
+    'model': {'providerId': provider, 'modelId': model},
     'thoughtLevel': ?thoughtLevel,
   });
 

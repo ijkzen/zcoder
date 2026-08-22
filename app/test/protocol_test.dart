@@ -941,6 +941,47 @@ void main() {
       expect(skills[1].enabled, isFalse);
     });
   });
+
+  group('zcode-session service wire args', () {
+    test('setModel sends the model as a {providerId, modelId} ref object', () async {
+      final channel = _RecordingChannel();
+      final service = ZcodeSessionService(
+        channel,
+        const WorkspaceTarget(workspacePath: '/ws'),
+      );
+      await service.setModel(
+        'sess_1',
+        provider: 'prov-1',
+        model: 'model-x',
+        thoughtLevel: 'max',
+      );
+      expect(channel.lastMethod, 'setModel');
+      final args = (channel.lastArgs as Map).cast<String, Object?>();
+      expect(args['sessionId'], 'sess_1');
+      expect(args['workspacePath'], '/ws');
+      // The host resolves `model` against its provider registry as-is; a
+      // "provider/model" string never matches and the call fails with
+      // "当前会话使用的模型已不可用".
+      expect(args['model'], {'providerId': 'prov-1', 'modelId': 'model-x'});
+      expect(args['thoughtLevel'], 'max');
+    });
+  });
+}
+
+/// Records the last `call` so a service wrapper's wire args can be asserted.
+class _RecordingChannel extends RpcChannel {
+  _RecordingChannel()
+    : super('zcode-session', ChannelClient(const Stream.empty(), (_) {}));
+
+  String? lastMethod;
+  Object? lastArgs;
+
+  @override
+  Future<Object?> call(String method, [Object? args]) async {
+    lastMethod = method;
+    lastArgs = args;
+    return const <String, Object?>{};
+  }
 }
 
 // ---------- helpers: construct frames the way the desktop does ----------

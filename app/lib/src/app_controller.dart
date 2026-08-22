@@ -613,6 +613,12 @@ class AppController extends ChangeNotifier {
       model: model,
       thoughtLevel: thoughtLevel,
     );
+    // The host's setModel resolves only the model ref — a requested thought
+    // level goes through the dedicated RPC, which resolves against the
+    // runtime model setModel just cached.
+    if (thoughtLevel != null) {
+      await service.setThoughtLevel(sessionId, thoughtLevel);
+    }
   }
 
   /// Switches the open session's thought level (reasoning effort).
